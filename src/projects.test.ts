@@ -10,30 +10,28 @@ describe("resolveProject", () => {
   beforeEach(async () => {
     workspaceRoot = await mkdtemp(join(tmpdir(), "sandcastle-vps-test-"));
     await mkdir(join(workspaceRoot, "my-app", ".git"), { recursive: true });
+    await mkdir(join(workspaceRoot, "my-app", ".sandcastle"), { recursive: true });
+    await mkdir(join(workspaceRoot, "bare-checkout", ".git"), { recursive: true });
     await mkdir(join(workspaceRoot, "not-a-repo"), { recursive: true });
-    await mkdir(join(workspaceRoot, "custom-image", ".git"), { recursive: true });
-    await mkdir(join(workspaceRoot, "custom-image", ".sandcastle"), { recursive: true });
-    await mkdir(join(workspaceRoot, "custom-image", ".sandcastle", "Dockerfile"), {
-      recursive: true,
-    });
   });
 
   afterEach(async () => {
     await rm(workspaceRoot, { recursive: true, force: true });
   });
 
-  it("resolves a git checkout by directory name", async () => {
+  it("resolves an Onboarded checkout to its own sandcastle image", async () => {
     const project = await resolveProject(workspaceRoot, "my-app");
     expect(project).toEqual({
       name: "my-app",
       path: join(workspaceRoot, "my-app"),
-      hasOwnSandboxImage: false,
+      imageName: "sandcastle:my-app",
     });
   });
 
-  it("detects a project-owned sandbox image", async () => {
-    const project = await resolveProject(workspaceRoot, "custom-image");
-    expect(project.hasOwnSandboxImage).toBe(true);
+  it("rejects a checkout that has never been Onboarded, naming the onboarding step", async () => {
+    await expect(resolveProject(workspaceRoot, "bare-checkout")).rejects.toThrow(
+      /has not been Onboarded[\s\S]*init-project bare-checkout/,
+    );
   });
 
   it("rejects directories that are not git checkouts", async () => {
@@ -42,8 +40,14 @@ describe("resolveProject", () => {
     );
   });
 
+  it("rejects a name that does not exist under the workspace root", async () => {
+    await expect(resolveProject(workspaceRoot, "ghost")).rejects.toThrow(
+      /not a git checkout/,
+    );
+  });
+
   it("rejects names that traverse out of the workspace root", async () => {
-    for (const name of ["../etc", "a/b", "..", ".", "/abs"]) {
+    for (const name of ["../etc", "a/b", "..", ".", "/abs", ""]) {
       await expect(resolveProject(workspaceRoot, name)).rejects.toThrow(
         /Invalid project name/,
       );

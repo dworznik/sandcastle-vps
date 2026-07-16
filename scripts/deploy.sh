@@ -60,13 +60,12 @@ if [ -f "$HOME/.claude-tmux/.env" ]; then
 fi
 
 missing=""
-for key in HOST_WORKSPACE_ROOT CLAUDE_CODE_OAUTH_TOKEN; do
+for key in HOST_WORKSPACE_ROOT; do
   value="$(grep -E "^${key}=" .env | head -1 | cut -d= -f2- || true)"
   [ -z "$value" ] && missing="$missing $key"
 done
 if [ -n "$missing" ]; then
   echo "Fill in$missing in ~/.sandcastle-vps/.env, then re-run the deploy." >&2
-  echo "(CLAUDE_CODE_OAUTH_TOKEN comes from running: claude setup-token)" >&2
   exit 1
 fi
 
@@ -75,13 +74,8 @@ set -a
 source .env
 set +a
 
-echo "==> Building default sandbox image (${SANDBOX_IMAGE:-sandcastle-vps-sandbox})"
-docker build \
-  -f docker/sandbox/Dockerfile \
-  -t "${SANDBOX_IMAGE:-sandcastle-vps-sandbox}" \
-  --build-arg AGENT_UID="$DEV_UID" \
-  --build-arg AGENT_GID="$DEV_GID" \
-  .
+# No shared sandbox image is built here: each Project owns its own image,
+# built during Onboarding (ADR 0003).
 
 echo "==> Building and starting the compose stack"
 docker compose build

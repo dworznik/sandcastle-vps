@@ -1,7 +1,9 @@
-# Default Sandbox image, used for every project that does not ship its own
-# .sandcastle/Dockerfile. Based on sandcastle's scaffolded template, plus the
-# GitHub CLI and the mattpocock/skills set baked in at build time (sandboxes
-# are ephemeral, so there is no volume to install into at runtime).
+# NOT a shared Sandbox image — nothing builds or runs this. There is no shared
+# fallback image: every Project owns its own (ADR 0003). This is kept only as
+# the source of the extras block (GitHub CLI + the mattpocock/skills set, baked
+# in at build time because sandboxes are ephemeral) that the `init-project`
+# helper appends to each Project's scaffolded .sandcastle/Dockerfile. Delete it
+# once that helper carries the block itself.
 FROM node:22-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
