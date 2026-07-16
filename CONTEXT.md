@@ -5,7 +5,7 @@ Ubiquitous language for sandcastle-vps. Glossary only — no implementation deta
 ## Terms
 
 ### Harness
-The application this repo produces: a TypeScript CLI wrapping the sandcastle library. It runs on the VPS in its own container and is what a user (or automation) invokes to start a Run.
+The application this repo produces: a service wrapping the sandcastle library that executes Runs. It runs on the VPS and is what a Dispatch ultimately reaches.
 
 ### Run
 One invocation of an agent against a Project: a task description goes in, a Task Branch comes out. Executed by sandcastle inside a Sandbox. A Run is requested by a Dispatch and queued by the Orchestrator; it is never executed synchronously in the caller's process.
@@ -17,16 +17,16 @@ The act of requesting a Run — an event carrying the Project and task descripti
 The component that queues Dispatches, enforces concurrency limits, and records Run history and status. (Currently Inngest — but the term, not the vendor, is the domain concept.)
 
 ### Project
-A git checkout on the VPS under the shared workspace root — the same checkout used interactively via claude-tmux sessions. A Project is the unit a Run targets.
+A git checkout on the VPS, under the workspace root, that has been Onboarded. Only Projects can be targeted by a Run. Each Project owns its Sandbox definition and credentials — there is no shared fallback.
+
+### Onboarding
+The one-time act of making a checkout a Project: scaffolding its sandcastle configuration, granting it credentials, and building its Sandbox image. A checkout that has not been Onboarded cannot receive Dispatches.
 
 ### Task Branch
-The named git branch where a Run's commits land. Agent work only ever becomes visible as a Task Branch; a Run never modifies a Project's HEAD or working tree.
+The named git branch where a Run's commits land. Agent work only ever becomes visible as a Task Branch; a Run never modifies a Project's HEAD or working tree. Re-dispatching to an existing Task Branch continues that task.
 
 ### Sandbox
-The isolated container sandcastle spawns for a single Run, containing the agent (Claude Code) and the Project's worktree. Ephemeral — exists only for the duration of the Run.
-
-### Stack
-This repo's own Docker Compose deployment on the VPS, independent of the claude-tmux stack, though it may share the VPS's workspace root and Docker daemon.
+The isolated container sandcastle spawns for a single Run, containing the agent (Claude Code) and the Project's worktree. Ephemeral — exists only for the duration of the Run — and built from the Project's own image, never a shared one.
 
 ### Local Config
-Machine-specific settings (VPS host, workspace root, tokens) kept out of version control — gitignored files seeded from committed examples. Two kinds: the Mac-side deploy target (SSH details) and the VPS-side runtime settings.
+Machine-specific settings kept out of version control. Three layers: the deploy target (on the operator's machine), the Harness's runtime settings (on the VPS), and each Project's own credentials (inside that Project's checkout).
