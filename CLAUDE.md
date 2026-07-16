@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commits and branches
+## Commits, branches, and pull requests
 
 Commit messages always follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <subject>`.
 
@@ -11,6 +11,10 @@ Commit messages always follow [Conventional Commits](https://www.conventionalcom
 - **Subject** is imperative mood, lowercase, no trailing period — "add init-project helper", not "Added init-project helper.".
 
 Branch names are prefixed with the same types: `<type>/<short-kebab-description>` (e.g. `feat/init-project`, `fix/stale-image-check`). The `sandcastle/` prefix is reserved for Task Branches produced by Runs — never use it for development branches.
+
+Never commit to `main`. Branch first — including for docs-only changes, and even when a skill or command says to commit to the current branch; that instruction assumes you are already on a development branch.
+
+Always open a pull request at the end of an implementation (`gh pr create --base main`), rather than leaving the work sitting on a local branch. The PR body states what changed, any decision worth a second opinion, and — explicitly — anything an acceptance criterion asked for that you could not verify.
 
 ## Agent skills
 
