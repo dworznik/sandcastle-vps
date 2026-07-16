@@ -1,61 +1,30 @@
+# The Orchestrator, and nothing else. The Harness runs as a systemd user
+# service on the host, where Docker and the Project checkouts natively live —
+# see ADR 0003.
 services:
   inngest:
     image: inngest/inngest:latest
-    command: ["inngest", "start", "--sdk-url", "http://harness:3000/api/inngest"]
+    # Host networking, because the two halves have to meet on loopback: the
+    # Harness binds 127.0.0.1, which a bridged container has no route to.
+    network_mode: host
+    command:
+      - inngest
+      - start
+      # With host networking there is no port publishing left to constrain the
+      # bind, so this flag is the only thing keeping the dashboard off the
+      # public interface. Reach it with: ssh -L 8288:127.0.0.1:8288 <vps>
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8288"
+      - --sdk-url
+      - http://127.0.0.1:${PORT:-3000}/api/inngest
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
     volumes:
       - inngest_data:/var/lib/inngest
-    ports:
-      # Host-local only: the VPS host dispatch command posts events here.
-      # Never bind to the public interface — remote access goes over the VPN.
-      - "127.0.0.1:8288:8288"
-    networks:
-      default: {}
-      vpn:
-        aliases:
-          - sandcastle-inngest
-    restart: unless-stopped
-
-  harness:
-    build:
-      context: .
-      dockerfile: docker/harness/Dockerfile
-      args:
-        DEV_UID: ${DEV_UID}
-        DEV_GID: ${DEV_GID}
-    # Docker socket access for spawning sibling sandbox containers.
-    group_add:
-      - "${DOCKER_GID}"
-    environment:
-      # Orchestration settings only. Agent credentials and sandbox images come
-      # from each Project's own .sandcastle/ — see ADR 0003.
-      WORKSPACE_ROOT: ${HOST_WORKSPACE_ROOT}
-      AGENT_MODEL: ${AGENT_MODEL:-claude-opus-4-8}
-      INNGEST_BASE_URL: http://inngest:8288
-      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
-      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
-      INNGEST_DEV: "0"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Same path on host and in container: sandbox bind mounts are created
-      # via the host Docker daemon, so worktree paths must be host paths.
-      - ${HOST_WORKSPACE_ROOT}:${HOST_WORKSPACE_ROOT}
-    ports:
-      # Host-local only: the VPS host dispatch command posts to /dispatch here.
-      - "127.0.0.1:3300:3000"
-    networks:
-      default: {}
-      vpn:
-        aliases:
-          - sandcastle-harness
     restart: unless-stopped
 
 volumes:
   inngest_data:
-
-networks:
-  vpn:
-    external: true
-    name: claude-tmux-vpn

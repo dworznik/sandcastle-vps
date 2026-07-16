@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Dispatch a sandcastle Run. Keyless: posts to the harness's /dispatch route,
-# reachable on localhost (VPS host) or via the VPN network alias (dev
-# container, VPN peers). Non-blocking — the Run is queued by the Orchestrator;
+# Dispatch a sandcastle Run. Keyless: posts to the Harness's /dispatch route on
+# loopback — reachability is the access control, so run this on the VPS host or
+# through an SSH tunnel. Non-blocking: the Run is queued by the Orchestrator;
 # watch progress in the Inngest dashboard or wait for the Task Branch.
 #
 # Usage:
@@ -57,7 +57,10 @@ dispatch_urls=()
 if [ -n "${SANDCASTLE_DISPATCH_URL:-}" ]; then
   dispatch_urls+=("$SANDCASTLE_DISPATCH_URL")
 fi
-dispatch_urls+=("http://127.0.0.1:3300" "http://sandcastle-harness:3000")
+# The Harness is a host process bound to loopback. From anywhere but this host
+# — a claude-tmux dev container, your laptop — come in over an SSH tunnel and
+# point SANDCASTLE_DISPATCH_URL at your end of it.
+dispatch_urls+=("http://127.0.0.1:${PORT:-3000}")
 
 for url in "${dispatch_urls[@]}"; do
   if response="$(curl -fsS --max-time 10 -X POST "$url/dispatch" \

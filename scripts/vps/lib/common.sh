@@ -12,10 +12,10 @@ workspace_root() {
   fi
   local env_file="$HOME/.sandcastle-vps/.env" root=""
   if [ -f "$env_file" ]; then
-    root="$(grep -E '^HOST_WORKSPACE_ROOT=' "$env_file" | head -1 | cut -d= -f2- || true)"
+    root="$(grep -E '^WORKSPACE_ROOT=' "$env_file" | head -1 | cut -d= -f2- || true)"
   fi
   if [ -z "$root" ]; then
-    echo "Cannot find the workspace root: set WORKSPACE_ROOT, or HOST_WORKSPACE_ROOT in ${env_file}." >&2
+    echo "Cannot find the workspace root: set WORKSPACE_ROOT in the environment or in ${env_file}." >&2
     return 1
   fi
   echo "$root"

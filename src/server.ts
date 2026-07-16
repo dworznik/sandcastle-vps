@@ -65,6 +65,6 @@ const server = createServer((req, res) => {
   inngestHandler(req, res);
 });
 
-server.listen(env.port, () => {
-  console.log(`sandcastle-vps harness listening on :${env.port}`);
+server.listen(env.port, env.host, () => {
+  console.log(`sandcastle-vps harness listening on ${env.host}:${env.port}`);
 });

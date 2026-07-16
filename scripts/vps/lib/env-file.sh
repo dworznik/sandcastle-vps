@@ -26,12 +26,14 @@ env_file_upsert() {
   mkdir -p "$(dirname "$file")"
   [ -f "$file" ] || (umask 077 && : > "$file")
 
+  # The temp sits next to the file so the mv is atomic, which means it also
+  # sits inside the tree the operator is told to commit — and .gitignore covers
+  # `.env`, not `.env.a1B2c3`. Both exits below account for it: mv consumes it
+  # on success, and the failure path removes it. Deliberately not a RETURN
+  # trap: that outlives this function and re-fires when the *caller* returns,
+  # by which point $tmp is gone — fatal under `set -u`.
   local tmp
   tmp="$(umask 077 && mktemp "${file}.XXXXXX")"
-  # The temp sits next to the file so the mv is atomic, which means it also
-  # sits inside the tree the operator is told to commit — and .gitignore
-  # covers `.env`, not `.env.a1B2c3`. Clear it however we leave.
-  trap 'rm -f "$tmp"' RETURN
 
   # The key and value reach awk through the environment, not -v: -v processes
   # backslash escapes, which would mangle a token containing them. Matching is
@@ -54,6 +56,7 @@ env_file_upsert() {
   ' "$file" > "$tmp"; then
     # Without this the mv below would happily install a half-written or empty
     # file over the operator's credentials.
+    rm -f "$tmp"
     echo "env_file_upsert: failed to rewrite ${file}; it is unchanged" >&2
     return 1
   fi
