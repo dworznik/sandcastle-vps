@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # Every PR, not just those targeting main: a stacked PR is based on its
+  # parent branch, and filtering on main would leave the whole stack untested
+  # until the moment it lands.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
