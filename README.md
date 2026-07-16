@@ -22,6 +22,22 @@ cp deploy.local.example deploy.local   # set SSH_TARGET=user@your-vps
 
 The first deploy stops and asks you to fill the remote `~/.sandcastle-vps/.env` if the workspace root can't be auto-detected from claude-tmux; Inngest keys are auto-generated. Re-run to finish. Subsequent deploys are one command. Agent tokens are not part of this file — they live in each Project's `.sandcastle/.env`.
 
+## Onboard a Project
+
+A checkout can only receive Runs once it's been Onboarded. On the VPS host:
+
+```bash
+claude setup-token | init-project my-app
+```
+
+That scaffolds `.sandcastle/` with the real `sandcastle init`, appends this stack's skill set to the generated Dockerfile, seeds `.sandcastle/.env` with the token, and builds `sandcastle:my-app`. Commit the resulting `.sandcastle/` — its `.gitignore` already excludes the `.env`. Re-running on an Onboarded Project fails rather than overwriting your customizations.
+
+The token is never stored centrally: it's supplied per invocation, and the only copies live in each Project's own `.sandcastle/.env`. To roll a reissued token across every Project at once:
+
+```bash
+claude setup-token | sync-env
+```
+
 ## Dispatch a Run
 
 On the VPS host, or inside a claude-tmux session (both keyless — the harness holds the event key):

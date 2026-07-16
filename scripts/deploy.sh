@@ -81,9 +81,13 @@ echo "==> Building and starting the compose stack"
 docker compose build
 docker compose up -d --remove-orphans
 
-echo "==> Installing host dispatch command"
+echo "==> Installing host commands"
 mkdir -p "$HOME/.local/bin"
-ln -sf "$HOME/.sandcastle-vps/scripts/vps/sandcastle-run" "$HOME/.local/bin/sandcastle-run"
+for cmd in sandcastle-run init-project sync-env; do
+  ln -sf "$HOME/.sandcastle-vps/scripts/vps/$cmd" "$HOME/.local/bin/$cmd"
+done
 
-echo "==> Done. Dispatch with: sandcastle-run <project> \"task\""
+echo "==> Done."
+echo "    Onboard a checkout with: claude setup-token | init-project <project>"
+echo "    Dispatch with:           sandcastle-run <project> \"task\""
 REMOTE
