@@ -1,7 +1,8 @@
 import { claudeCode, run } from "@ai-hero/sandcastle";
-import { defaultImageName, docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { taskBranch, validateBranch } from "../branch.js";
 import { env } from "../env.js";
+import { ensureSandboxImage } from "../image.js";
 import { inngest, runRequested } from "../inngest.js";
 import { resolveProject } from "../projects.js";
 
@@ -21,18 +22,23 @@ export const sandcastleRun = inngest.createFunction(
       ? validateBranch(event.data.branch)
       : taskBranch(event.data.task);
     const model = event.data.model ?? env.defaultModel;
-    const imageName = project.hasOwnSandboxImage
-      ? defaultImageName(project.path)
-      : env.defaultSandboxImage;
+    const { imageName } = project;
 
-    logger.info("starting run", { project: project.name, branch, model, imageName });
+    const { built } = await ensureSandboxImage(project);
+    logger.info("starting run", {
+      project: project.name,
+      branch,
+      model,
+      imageName,
+      builtImage: built,
+    });
 
     const result = await run({
       cwd: project.path,
       prompt: event.data.task,
-      agent: claudeCode(model, {
-        env: { CLAUDE_CODE_OAUTH_TOKEN: env.claudeCodeOauthToken },
-      }),
+      // No credentials from the harness: `cwd` anchors sandcastle's env
+      // resolver on the Project's own .sandcastle/.env (ADR 0003).
+      agent: claudeCode(model),
       sandbox: docker({ imageName }),
       // Task Branch only — head/merge-to-head are forbidden on shared
       // checkouts. See ADR 0001.

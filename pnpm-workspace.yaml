@@ -1,3 +1,5 @@
 allowBuilds:
-  esbuild: set this to true or false
-  protobufjs: set this to true or false
+  # vitest's bundler — its postinstall fetches the platform binary.
+  esbuild: true
+  # Inngest transitive; its build script only regenerates vendored code.
+  protobufjs: false

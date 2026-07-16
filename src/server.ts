@@ -4,6 +4,7 @@ import { z } from "zod";
 import { env } from "./env.js";
 import { sandcastleRun } from "./functions/run.js";
 import { inngest, runRequested, runRequestedData } from "./inngest.js";
+import { resolveProject } from "./projects.js";
 
 const inngestHandler = serve({ client: inngest, functions: [sandcastleRun] });
 
@@ -36,6 +37,15 @@ const handleDispatch = async (req: IncomingMessage, res: ServerResponse) => {
   const data = runRequestedData.safeParse(parsed);
   if (!data.success) {
     return json(res, 400, { error: z.prettifyError(data.error) });
+  }
+  // Resolve the Project up front so a dispatcher learns that a checkout is
+  // missing or not Onboarded here, rather than having to go read a failed Run
+  // in the Orchestrator. The Run resolves it again — this is a courtesy, not
+  // the guard.
+  try {
+    await resolveProject(env.workspaceRoot, data.data.project);
+  } catch (error) {
+    return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
   }
   const { ids } = await inngest.send(runRequested.create(data.data));
   return json(res, 202, { ids });

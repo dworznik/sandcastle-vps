@@ -29,9 +29,9 @@ services:
     group_add:
       - "${DOCKER_GID}"
     environment:
+      # Orchestration settings only. Agent credentials and sandbox images come
+      # from each Project's own .sandcastle/ — see ADR 0003.
       WORKSPACE_ROOT: ${HOST_WORKSPACE_ROOT}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
-      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-sandcastle-vps-sandbox}
       AGENT_MODEL: ${AGENT_MODEL:-claude-opus-4-8}
       INNGEST_BASE_URL: http://inngest:8288
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
