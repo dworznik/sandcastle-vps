@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# Dispatch a sandcastle Run. Keyless: posts to the harness's /dispatch route,
+# reachable on localhost (VPS host) or via the VPN network alias (dev
+# container, VPN peers). Non-blocking — the Run is queued by the Orchestrator;
+# watch progress in the Inngest dashboard or wait for the Task Branch.
+#
+# Usage:
+#   sandcastle-run <project> <task...> [--branch <name>] [--model <model>]
+set -euo pipefail
+
+usage() {
+  echo "Usage: sandcastle-run <project> <task...> [--branch <name>] [--model <model>]" >&2
+  exit 1
+}
+
+[ $# -ge 2 ] || usage
+
+project="$1"
+shift
+
+branch=""
+model=""
+task_parts=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --branch)
+      [ $# -ge 2 ] || usage
+      branch="$2"
+      shift 2
+      ;;
+    --model)
+      [ $# -ge 2 ] || usage
+      model="$2"
+      shift 2
+      ;;
+    *)
+      task_parts+=("$1")
+      shift
+      ;;
+  esac
+done
+
+[ ${#task_parts[@]} -gt 0 ] || usage
+task="${task_parts[*]}"
+
+payload="$(jq -n \
+  --arg project "$project" \
+  --arg task "$task" \
+  --arg branch "$branch" \
+  --arg model "$model" \
+  '{project: $project, task: $task}
+   + (if $branch != "" then {branch: $branch} else {} end)
+   + (if $model != "" then {model: $model} else {} end)')"
+
+dispatch_urls=()
+if [ -n "${SANDCASTLE_DISPATCH_URL:-}" ]; then
+  dispatch_urls+=("$SANDCASTLE_DISPATCH_URL")
+fi
+dispatch_urls+=("http://127.0.0.1:3300" "http://sandcastle-harness:3000")
+
+for url in "${dispatch_urls[@]}"; do
+  if response="$(curl -fsS --max-time 10 -X POST "$url/dispatch" \
+    -H 'content-type: application/json' -d "$payload" 2>/dev/null)"; then
+    echo "Dispatched to $url: $response"
+    exit 0
+  fi
+done
+
+echo "Failed to reach the sandcastle harness at: ${dispatch_urls[*]}" >&2
+exit 1

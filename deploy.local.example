@@ -1,0 +1,3 @@
+# Mac-side deploy target. Copy to deploy.local (gitignored) and fill in:
+#   cp deploy.local.example deploy.local
+SSH_TARGET=user@your-vps
