@@ -12,10 +12,10 @@ workspace_root() {
   fi
   local env_file="$HOME/.sandcastle-vps/.env" root=""
   if [ -f "$env_file" ]; then
-    root="$(grep -E '^HOST_WORKSPACE_ROOT=' "$env_file" | head -1 | cut -d= -f2- || true)"
+    root="$(grep -E '^WORKSPACE_ROOT=' "$env_file" | head -1 | cut -d= -f2- || true)"
   fi
   if [ -z "$root" ]; then
-    echo "Cannot find the workspace root: set WORKSPACE_ROOT, or HOST_WORKSPACE_ROOT in ${env_file}." >&2
+    echo "Cannot find the workspace root: set WORKSPACE_ROOT in the environment or in ${env_file}." >&2
     return 1
   fi
   echo "$root"
@@ -42,6 +42,11 @@ sandcastle() {
   repo_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../.." && pwd)"
   cli="${repo_root}/node_modules/@ai-hero/sandcastle/dist/main.js"
   if [ -f "$cli" ]; then
+    if ! command -v node > /dev/null 2>&1; then
+      echo "node is not on PATH. The deploy links it into ~/.local/bin — re-run" >&2
+      echo "the deploy, or run this from a login shell (bash -l)." >&2
+      return 1
+    fi
     node "$cli" "$@"
     return
   fi

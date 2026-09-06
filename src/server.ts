@@ -22,10 +22,11 @@ const json = (res: ServerResponse, status: number, body: unknown): void => {
 };
 
 /**
- * Keyless Dispatch surface for callers on the VPS host (localhost) and the
- * VPN network — the harness holds the Inngest event key so dispatchers
- * don't have to. Reachability is the access control: this port is never
- * exposed on the public interface.
+ * Keyless Dispatch surface for callers on the VPS host (loopback) — the
+ * harness holds the Inngest event key so dispatchers don't have to.
+ * Reachability is the access control: this port is never exposed on the
+ * public interface. The same server also answers the Orchestrator, which
+ * reaches it over the docker bridge (see `env.hosts`).
  */
 const handleDispatch = async (req: IncomingMessage, res: ServerResponse) => {
   let parsed: unknown;
@@ -51,7 +52,7 @@ const handleDispatch = async (req: IncomingMessage, res: ServerResponse) => {
   return json(res, 202, { ids });
 };
 
-const server = createServer((req, res) => {
+const handler = (req: IncomingMessage, res: ServerResponse): void => {
   if (req.url === "/dispatch") {
     if (req.method !== "POST") {
       return json(res, 405, { error: "Use POST" });
@@ -63,8 +64,18 @@ const server = createServer((req, res) => {
     return;
   }
   inngestHandler(req, res);
-});
+};
 
-server.listen(env.port, () => {
-  console.log(`sandcastle-vps harness listening on :${env.port}`);
-});
+// One listener per address (a Node server binds exactly one). The bridge
+// gateway only exists once dockerd is up; if this process wins that race at
+// boot, the bind fails and we exit so systemd's Restart= tries again shortly.
+for (const host of env.hosts) {
+  createServer(handler)
+    .on("error", (error) => {
+      console.error(`sandcastle-vps harness failed to listen on ${host}:${env.port}`, error);
+      process.exit(1);
+    })
+    .listen(env.port, host, () => {
+      console.log(`sandcastle-vps harness listening on ${host}:${env.port}`);
+    });
+}

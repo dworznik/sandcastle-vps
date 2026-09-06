@@ -1,0 +1,35 @@
+# Template. The deploy substitutes @REPO@ and @NODE@ and installs the result
+# as ~/.config/systemd/user/sandcastle-harness.service — a *user* service, so
+# it runs as the operator who owns the Project checkouts and the Docker socket
+# access, with no root anywhere in the picture.
+[Unit]
+Description=sandcastle-vps Harness (executes Runs against Onboarded Projects)
+Documentation=https://github.com/dworznik/sandcastle-vps
+# No network-online.target or docker.service ordering: those are system units
+# and mean nothing in the user manager. The Harness binds loopback plus the
+# docker bridge gateway, which exists only once dockerd is up; if this unit
+# wins that race at boot the bind fails, the process exits, and Restart= below
+# brings it back once the bridge is there.
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+# The same file the deploy seeds and the Onboarding commands read, so the
+# Harness and those commands can never disagree about the workspace root.
+EnvironmentFile=@REPO@/.env
+ExecStart=@NODE@ @REPO@/node_modules/tsx/dist/cli.mjs @REPO@/src/server.ts
+
+Restart=always
+RestartSec=5
+
+# A Run is one long opaque step that cannot be safely retried (ADR 0002), so
+# give an in-flight Run a moment to finish rather than killing it mid-agent.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sandcastle-harness
+
+[Install]
+WantedBy=default.target

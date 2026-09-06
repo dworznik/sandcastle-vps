@@ -97,6 +97,27 @@ describe("env_file_upsert", () => {
     });
   });
 
+  // The deploy wraps this in `ensure_env_key() { env_file_upsert ...; }` and
+  // runs under `set -euo pipefail`, which is the shape that catches cleanup
+  // leaking out of the function into its caller's scope.
+  it("survives being called from a wrapper function under set -euo pipefail", async () => {
+    await writeFile(file, "GH_TOKEN=ghp_keepme\n");
+    const script = `
+      set -euo pipefail
+      source "${LIB}"
+      ensure_env_key() { env_file_upsert "${file}" "$1" "$2" seed; }
+      after() { echo "still running"; }
+      ensure_env_key CLAUDE_CODE_OAUTH_TOKEN sk-ant-one
+      ensure_env_key OTHER_KEY value-two
+      after
+    `;
+    const { stdout } = await exec("bash", ["-c", script]);
+    expect(stdout).toContain("still running");
+    expect(await readFile(file, "utf8")).toBe(
+      "GH_TOKEN=ghp_keepme\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-one\nOTHER_KEY=value-two\n",
+    );
+  });
+
   it("leaves no temp file behind on success", async () => {
     await upsert(file, "CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-new", "seed");
     expect(await readdir(dir)).toEqual([".env"]);
