@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# Stamp a reissued agent token into every Onboarded Project's .sandcastle/.env
+# in one pass. This is how token rotation works when no token is centralized:
+# each Project keeps its own copy, and this walks them (ADR 0003).
+#
+# Only the token line changes; everything else in each .env is left alone.
+#
+# Usage:
+#   claude setup-token | sync-env
+#   CLAUDE_CODE_OAUTH_TOKEN=... sync-env
+set -euo pipefail
+
+# readlink -f, not dirname alone: the deploy installs this as a symlink on
+# PATH, and BASH_SOURCE reports the symlink rather than what it points at.
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${here}/lib/common.sh"
+# shellcheck source=lib/env-file.sh
+source "${here}/lib/env-file.sh"
+
+root="$(workspace_root)"
+token="$(read_agent_token)"
+
+updated=0
+for sandcastle_dir in "${root}"/*/.sandcastle; do
+  # No Onboarded Projects: the glob comes back unexpanded.
+  [ -d "$sandcastle_dir" ] || continue
+  project="$(basename "$(dirname "$sandcastle_dir")")"
+  env_file_upsert "${sandcastle_dir}/.env" CLAUDE_CODE_OAUTH_TOKEN "$token" rotate
+  echo "  updated ${project}"
+  updated=$((updated + 1))
+done
+
+if [ "$updated" -eq 0 ]; then
+  echo "No Onboarded Projects under ${root}. Onboard one with: init-project <project>" >&2
+  exit 1
+fi
+
+echo "Stamped the token into ${updated} Project(s)."
