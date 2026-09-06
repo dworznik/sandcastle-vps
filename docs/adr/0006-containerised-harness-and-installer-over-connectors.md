@@ -1,0 +1,23 @@
+# Containerised Harness, Harness-held credentials, and an installer over connectors
+
+Provisioning a VPS by hand — deploy script from a checkout, tokens pasted over SSH, identity edited into files, keys registered by reading terminal output — took most of a day and involved unsafe copy-paste at every step. The replacement is a creator CLI, `npx @dworznik/sandcastle-vps`, run on the dev machine with no checkout, that provisions a **Target** over a **Connector** (ssh now; OrbStack, Docker Desktop and `docker context` later) and stays the single way to install, upgrade, add a Project, rotate credentials, and check status. The package is the Harness: the CLI ships its own contents over the connector, so a Target needs neither git nor npm credentials and always runs the version the CLI carries. It is published publicly; the code holds no secrets.
+
+That requirement decides three things at once. **The Harness is a container on every connector**, beside the Orchestrator in compose, spawning sandboxes through the Target engine's socket. Docker Desktop and `docker context` targets have no host to run a process on, and one deployment shape is cheaper than two; every fix the host-process deploy needed on a fresh machine — nvm absent from non-interactive shells, unchecked packages, Inngest's connect gateway and gRPC ports binding every interface under host networking, the bridge dual-bind and boot race that worked around it — was a cost of not being a container. Inngest now reaches the Harness by service name, and the keyless Dispatch surface is published on loopback alone. **Credentials are Harness-held and injected per Run**: the CLI writes them once into the Target's compose `.env` and a key file, and the Harness passes them to each sandbox through `run({ env })` and a read-only mount of the signing key. There are no per-Project credential copies to stamp or rotate. **Interactive sessions become sandboxes** — sandcastle's `interactive()` on a worktree with the same identity injected — and the long-lived claude-tmux container is deprecated; operator work happens from the dev machine over SSH.
+
+The deciding trade-off on credentials: a container does not move secrets off the Target's disk — volumes and compose secrets are host files — so the choice was between one copy the Harness owns and N copies per Project that a sync helper keeps aligned. The per-Project model bought standalone-runnability, which the Harness never used (it passes its own prompt, not the Project's `main.mts`), at the price of the copy-paste workflow this decision exists to remove.
+
+## Considered Options
+
+- **Keep the host-process Harness for ssh Targets and containerise only where there is no host** — rejected: two deployment shapes to test, and the ssh shape is the one that kept breaking.
+- **Keep per-Project credential stamping (`sync-env`) under a container** — rejected: the sprawl is the pain, and the container removes the reason for it.
+- **Target pulls a published image or clones the repo** — rejected: both need a credential on the Target before anything else exists; shipping the package needs none.
+- **Private npm or GitHub Packages** — rejected: one more credential on every dev machine for code that holds no secrets.
+- **An external secrets manager** — deferred: the only option that avoids plaintext at rest on the Target, and new infrastructure to keep alive; revisit if a Target is shared.
+
+## Consequences
+
+- Retired: `scripts/deploy.sh`, the systemd unit, nvm on the Target, the `~/.local/bin` links, `sync-env`, `agent.env`, the Harness's bridge dual-bind and its off-loopback guard (the CLI performs that check from outside instead). `docker/harness/` returns; `docker/sandbox/extras.Dockerfile` stays.
+- A Project's committed `.sandcastle/` still carries its Dockerfile and template; it no longer carries a `.env`. Running a Project standalone with `npx tsx .sandcastle/main.ts` is not supported.
+- The Harness container holds the Docker socket and a path-parity mount of the workspace root: it is root-equivalent on the Target. This was already true of the host process through the operator's docker group; it is now explicit.
+- The Target's compose `.env` is the one place agent credentials live, mode 600, owned by the operator. Rotation is one CLI action.
+- ADR 0003 is amended in both its clauses; ADR 0001 keeps its conclusion with an updated rationale. Do not reintroduce a host-process mode "just for the VPS".

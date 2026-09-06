@@ -20,7 +20,7 @@ The component that queues Dispatches, enforces concurrency limits, and records R
 A git checkout on the VPS, under the workspace root, that has been Onboarded. Only Projects can be targeted by a Run. Each Project owns its Sandbox definition and credentials — there is no shared fallback.
 
 ### Onboarding
-The one-time act of making a checkout a Project: scaffolding its sandcastle configuration, granting it credentials, and building its Sandbox image. A checkout that has not been Onboarded cannot receive Dispatches.
+The one-time act of making a checkout a Project: scaffolding its sandcastle configuration and building its Sandbox image. A checkout that has not been Onboarded cannot receive Dispatches. Credentials are not part of it — the Harness holds them and injects them per Run.
 
 ### Task Branch
 The named git branch where a Run's commits land. Agent work only ever becomes visible as a Task Branch; a Run never modifies a Project's HEAD or working tree. Re-dispatching to an existing Task Branch continues that task.
@@ -38,4 +38,10 @@ Where an issue sits in the Loop at a given moment — awaiting Dispatch, running
 The account-wide point past which no Run may start, because the Claude subscription's usage window is exhausted. The quota is shared across every Project, so the gate defers all queued Dispatches — not only the Run that hit the limit.
 
 ### Local Config
-Machine-specific settings kept out of version control. Three layers: the deploy target (on the operator's machine), the Harness's runtime settings (on the VPS), and each Project's own credentials (inside that Project's checkout).
+Machine-specific settings kept out of version control. Two layers: the Target profile on the operator's machine (never a secret), and the Harness's runtime settings on the Target, which include the agent's credentials.
+
+### Target
+A machine or container engine the platform is installed on — a VPS, an OrbStack machine, the operator's own Docker Desktop — reached only through a Connector. The Harness, the Orchestrator, the workspace root and the credentials all live on the Target.
+
+### Connector
+How the creator CLI reaches a Target from the operator's machine: ssh, OrbStack, Docker Desktop, or a Docker context. A Connector delivers the package, runs commands, and performs checks; it is the only thing that differs between kinds of Target.
