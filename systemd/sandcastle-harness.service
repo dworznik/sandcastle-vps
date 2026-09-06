@@ -5,9 +5,11 @@
 [Unit]
 Description=sandcastle-vps Harness (executes Runs against Onboarded Projects)
 Documentation=https://github.com/dworznik/sandcastle-vps
-# No network-online.target ordering: that's a system target and means nothing
-# in the user manager. The Harness binds loopback and retries its connection to
-# the Orchestrator anyway, so start order doesn't matter.
+# No network-online.target or docker.service ordering: those are system units
+# and mean nothing in the user manager. The Harness binds loopback plus the
+# docker bridge gateway, which exists only once dockerd is up; if this unit
+# wins that race at boot the bind fails, the process exits, and Restart= below
+# brings it back once the bridge is there.
 
 [Service]
 Type=simple

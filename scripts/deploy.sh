@@ -80,6 +80,18 @@ if [ -z "$(env_value WORKSPACE_ROOT)" ]; then
   exit 1
 fi
 
+# The Orchestrator is a bridged container that has to dial the Harness. A
+# container has no route to host loopback, so the Harness also binds the docker
+# bridge gateway — an address only this host and its containers can reach —
+# and this is where that address is discovered. Seeded, not overwritten: a
+# hand-set value survives; clear it in .env to re-detect.
+bridge_ip="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+if [ -z "$bridge_ip" ] && [ -z "$(env_value DOCKER_BRIDGE_IP)" ]; then
+  echo "Could not read the docker bridge gateway. Is Docker running, and is $USER in the docker group?" >&2
+  exit 1
+fi
+[ -n "$bridge_ip" ] && ensure_env_key DOCKER_BRIDGE_IP "$bridge_ip"
+
 # ----------------------------------------------------------------- toolchain
 
 node_major() {
@@ -149,22 +161,29 @@ if ! systemctl --user is-active --quiet sandcastle-harness; then
   exit 1
 fi
 
-# The Dispatch surface and the dashboard are both keyless, so "bound to
-# loopback" is the whole of their access control — assert it rather than trust
-# it. This also covers Inngest's connect gateway (8289), which host networking
-# leaves entirely to inngest's own bind behaviour: with no port publishing in
-# the way, a listener that ignores --host would be on the public internet.
+# The Dispatch surface and the dashboard are both keyless, so reachability is
+# the whole of their access control — assert it rather than trust it. What
+# must hold on the host:
+#   - the Harness port: loopback, plus the docker bridge gateway (the one
+#     address the Orchestrator's container can reach; unroutable from outside);
+#   - 8288: loopback only (published there by compose);
+#   - 8289, 50052, 50053: absent. Inngest binds its connect gateway and gRPC
+#     ports on every interface and ignores --host for them; bridge networking
+#     is what keeps them inside the container, so their appearing here at all
+#     means the container is on host networking again.
 # Resolve the port to a concrete default first: PORT is commented out in
 # .env.example, and an empty branch here makes the alternation an invalid
 # regex, which would fail this check open.
 harness_port="$(env_value PORT)"
 harness_port="${harness_port:-3000}"
+bridge_ip="$(env_value DOCKER_BRIDGE_IP)"
 
 exposed="$(
   ss -ltnH 2>/dev/null |
     awk '{print $4}' |
-    grep -E ":(8288|8289|${harness_port})$" |
-    grep -vE '^(127\.0\.0\.1|\[::1\]|localhost)' || true
+    grep -E ":(8288|8289|50052|50053|${harness_port})$" |
+    grep -vE '^(127\.0\.0\.1|\[::1\]|localhost):' |
+    grep -vxF "${bridge_ip}:${harness_port}" || true
 )"
 if [ -n "$exposed" ]; then
   echo "REFUSING TO FINISH: these are listening off-loopback:" >&2

@@ -3,25 +3,36 @@
 # see ADR 0003.
 services:
   inngest:
-    image: inngest/inngest:latest
-    # Host networking, because the two halves have to meet on loopback: the
-    # Harness binds 127.0.0.1, which a bridged container has no route to.
-    network_mode: host
+    # Pinned. `--host` governs only the API/dashboard bind: the connect gateway
+    # (8289) and the two gRPC ports (50052, 50053) bind every interface
+    # regardless, and no flag or env key changes that (verified on 1.44.0).
+    # Bridge networking is what keeps them off the host — only what `ports`
+    # publishes is reachable, and it is published on loopback alone.
+    image: inngest/inngest:v1.44.0
+    # The default bridge, not a compose-created network, so the container's
+    # gateway is docker0 — the address the Harness listens on for it.
+    network_mode: bridge
     command:
       - inngest
       - start
-      # With host networking there is no port publishing left to constrain the
-      # bind, so this flag is the only thing keeping the dashboard off the
-      # public interface. Reach it with: ssh -L 8288:127.0.0.1:8288 <vps>
+      # All interfaces *inside the container's own namespace* — the published
+      # port cannot reach a container-loopback bind. Exposure is decided by
+      # `ports` below, not here.
       - --host
-      - 127.0.0.1
+      - 0.0.0.0
       - --port
       - "8288"
+      # The Harness, at the docker bridge gateway — the second address it
+      # binds. The deploy detects the gateway and seeds it into .env.
       - --sdk-url
-      - http://127.0.0.1:${PORT:-3000}/api/inngest
+      - http://${DOCKER_BRIDGE_IP:?seeded by the deploy from the docker bridge}:${PORT:-3000}/api/inngest
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+    ports:
+      # Dashboard and event API, host-loopback only. Reach it with:
+      #   ssh -L 8288:127.0.0.1:8288 <vps>
+      - "127.0.0.1:8288:8288"
     volumes:
       - inngest_data:/var/lib/inngest
     restart: unless-stopped

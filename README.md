@@ -6,14 +6,14 @@ See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing de
 
 ## Architecture
 
-Two pieces on the VPS, both bound to loopback:
+Two pieces on the VPS, neither reachable from outside it:
 
 - **Orchestrator** — a self-hosted Inngest server, the one thing still in this repo's compose stack. Queues Dispatches, serializes Runs per Project (concurrency 1), and records Run history. Dashboard on 8288.
 - **Harness** — this repo's TypeScript app (`@ai-hero/sandcastle`), running as a **systemd user service** on the host rather than in a container, because that is where Docker and the Project checkouts natively live. It executes each Run: resolves the Project, ensures its image, and locks the branch strategy to a named Task Branch.
 
 A Run only targets an **Onboarded** Project — a checkout with its own committed `.sandcastle/` directory. That Project's own `sandcastle:<dir-name>` image runs the Sandbox, and its own `.sandcastle/.env` supplies the agent token; the Harness holds neither. Dispatching to a checkout that was never Onboarded fails and tells you to Onboard it. When a Project's image is missing the Harness builds it once, and never rebuilds an existing one — so Dockerfile edits need a manual rebuild. See [ADR 0003](docs/adr/0003-strict-sandcastle-conventions-per-project-onboarding.md).
 
-Nothing listens on the public interface. The Dispatch surface is keyless — reachability *is* the access control — so both halves bind `127.0.0.1` and remote access goes through an SSH tunnel.
+Nothing listens on the public interface. The Dispatch surface is keyless — reachability *is* the access control. The Harness binds loopback plus the docker bridge gateway, so the Orchestrator's container can reach it — an address nothing off the host can route to. The Orchestrator is a bridged container that publishes only its dashboard, on loopback; its other listeners never leave the container. Remote access goes through an SSH tunnel, and the deploy refuses to finish if anything is listening where it shouldn't.
 
 ## Lifecycle
 
