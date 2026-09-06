@@ -22,11 +22,11 @@ const json = (res: ServerResponse, status: number, body: unknown): void => {
 };
 
 /**
- * Keyless Dispatch surface for callers on the VPS host (loopback) — the
+ * Keyless Dispatch surface for callers on the Target (loopback) — the
  * harness holds the Inngest event key so dispatchers don't have to.
- * Reachability is the access control: this port is never exposed on the
- * public interface. The same server also answers the Orchestrator, which
- * reaches it over the docker bridge (see `env.hosts`).
+ * Reachability is the access control: compose publishes this port on Target
+ * loopback and nowhere else. The same server also answers the Orchestrator,
+ * which reaches it by service name over the compose network.
  */
 const handleDispatch = async (req: IncomingMessage, res: ServerResponse) => {
   let parsed: unknown;
@@ -66,16 +66,14 @@ const handler = (req: IncomingMessage, res: ServerResponse): void => {
   inngestHandler(req, res);
 };
 
-// One listener per address (a Node server binds exactly one). The bridge
-// gateway only exists once dockerd is up; if this process wins that race at
-// boot, the bind fails and we exit so systemd's Restart= tries again shortly.
-for (const host of env.hosts) {
-  createServer(handler)
-    .on("error", (error) => {
-      console.error(`sandcastle-vps harness failed to listen on ${host}:${env.port}`, error);
-      process.exit(1);
-    })
-    .listen(env.port, host, () => {
-      console.log(`sandcastle-vps harness listening on ${host}:${env.port}`);
-    });
-}
+// One listener. The Harness is a container: the Orchestrator reaches it by
+// service name over the compose network, and the Target sees only what compose
+// publishes — loopback (see `env.host`).
+//
+// No listen-error handler: the one this had existed to lose the dockerd boot
+// race gracefully, and both the race and the systemd unit that restarted after
+// it are gone. A bind failure now throws, and compose's restart policy is the
+// supervisor.
+createServer(handler).listen(env.port, env.host, () => {
+  console.log(`sandcastle-vps harness listening on ${env.host}:${env.port}`);
+});

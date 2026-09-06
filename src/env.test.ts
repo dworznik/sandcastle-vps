@@ -7,7 +7,6 @@ describe("env", () => {
   beforeEach(() => {
     delete process.env.HOST;
     delete process.env.PORT;
-    delete process.env.DOCKER_BRIDGE_IP;
   });
 
   afterEach(() => {
@@ -15,8 +14,9 @@ describe("env", () => {
   });
 
   describe("host", () => {
-    // The harness runs as a plain process on the VPS host, so an all-interfaces
-    // bind would put the keyless dispatch surface on the public internet.
+    // Compose sets 0.0.0.0 explicitly for the container, where exposure is
+    // decided by port publishing. Everywhere else — a server run directly in
+    // development — the keyless Dispatch surface stays on loopback.
     it("binds loopback by default", () => {
       expect(env.host).toBe("127.0.0.1");
     });
@@ -24,31 +24,6 @@ describe("env", () => {
     it("can be overridden deliberately", () => {
       process.env.HOST = "0.0.0.0";
       expect(env.host).toBe("0.0.0.0");
-    });
-  });
-
-  describe("hosts", () => {
-    it("is loopback only when no bridge address is configured", () => {
-      expect(env.hosts).toEqual(["127.0.0.1"]);
-    });
-
-    // The Orchestrator is a bridged container: it cannot reach host loopback,
-    // but it can reach the docker bridge gateway, which nothing off the host
-    // can route to.
-    it("adds the docker bridge gateway so the Orchestrator can reach the harness", () => {
-      process.env.DOCKER_BRIDGE_IP = "172.17.0.1";
-      expect(env.hosts).toEqual(["127.0.0.1", "172.17.0.1"]);
-    });
-
-    it("treats an empty bridge value as unset", () => {
-      process.env.DOCKER_BRIDGE_IP = "";
-      expect(env.hosts).toEqual(["127.0.0.1"]);
-    });
-
-    it("does not double-bind when the bridge address equals the host", () => {
-      process.env.HOST = "172.17.0.1";
-      process.env.DOCKER_BRIDGE_IP = "172.17.0.1";
-      expect(env.hosts).toEqual(["172.17.0.1"]);
     });
   });
 

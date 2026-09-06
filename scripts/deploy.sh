@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
 # Deploy sandcastle-vps to the VPS: upload the repo to ~/.sandcastle-vps,
-# install Node and dependencies, seed/repair the remote .env, start the
-# Orchestrator (compose) and the Harness (systemd user service), and install
-# the host commands. The SSH target lives in the gitignored deploy.local
-# (see deploy.local.example).
+# seed/repair the remote .env, build and start the compose stack (Orchestrator
+# + Harness), and install the host Onboarding commands. The SSH target lives in
+# the gitignored deploy.local (see deploy.local.example).
+#
+# This is the interim path. It is replaced wholesale by the creator CLI, which
+# provisions a Target over a Connector with no checkout on either end.
 #
 # Idempotent: re-running never overwrites an existing .env value.
 set -euo pipefail
@@ -39,9 +41,6 @@ ssh "$SSH_TARGET" bash -s <<'REMOTE'
 set -euo pipefail
 repo="$HOME/.sandcastle-vps"
 cd "$repo"
-
-# systemctl --user over ssh has no session bus unless we point at one.
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # ------------------------------------------------------------- prerequisites
 
@@ -88,13 +87,6 @@ env_value() {
 ensure_env_key INNGEST_EVENT_KEY "$(openssl rand -hex 32)"
 ensure_env_key INNGEST_SIGNING_KEY "$(openssl rand -hex 32)"
 
-# Seeded explicitly rather than left to the .env.example copy: that copy only
-# happens for a *new* .env, so an upgrade from the compose era — where these
-# lived in compose.yaml — would otherwise never get them, and the SDK would
-# quietly talk to Inngest Cloud instead of the Orchestrator next door.
-ensure_env_key INNGEST_BASE_URL "http://127.0.0.1:8288"
-ensure_env_key INNGEST_DEV 0
-
 # Earlier versions kept the workspace root under the compose-era name; carry it
 # over so an existing deploy doesn't have to be re-answered by hand.
 legacy_root="$(env_value HOST_WORKSPACE_ROOT)"
@@ -111,19 +103,24 @@ if [ -z "$(env_value WORKSPACE_ROOT)" ]; then
   exit 1
 fi
 
-# The Orchestrator is a bridged container that has to dial the Harness. A
-# container has no route to host loopback, so the Harness also binds the docker
-# bridge gateway — an address only this host and its containers can reach —
-# and this is where that address is discovered. Seeded, not overwritten: a
-# hand-set value survives; clear it in .env to re-detect.
-bridge_ip="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
-if [ -z "$bridge_ip" ] && [ -z "$(env_value DOCKER_BRIDGE_IP)" ]; then
-  echo "Could not read the docker bridge gateway. Is Docker running, and is $USER in the docker group?" >&2
+# Who the Harness runs as, and which group makes the mounted socket usable.
+# Both are read off this host rather than guessed, so worktrees written through
+# the path-parity mount land owned by the operator and not by root. Seeded, not
+# overwritten: a hand-set value survives.
+ensure_env_key OPERATOR_UID "$(id -u)"
+ensure_env_key OPERATOR_GID "$(id -g)"
+docker_gid="$(getent group docker | cut -d: -f3 || true)"
+if [ -z "$docker_gid" ] && [ -z "$(env_value DOCKER_GID)" ]; then
+  echo "No docker group on this host. Install Docker Engine first." >&2
   exit 1
 fi
-[ -n "$bridge_ip" ] && ensure_env_key DOCKER_BRIDGE_IP "$bridge_ip"
+[ -n "$docker_gid" ] && ensure_env_key DOCKER_GID "$docker_gid"
 
 # ----------------------------------------------------------------- toolchain
+#
+# The Harness brings its own Node in its image. What still needs one here are
+# the host Onboarding commands, which shell out to the sandcastle CLI — until
+# Onboarding moves into the Harness container too.
 
 node_major() {
   command -v node > /dev/null 2>&1 || return 1
@@ -148,36 +145,41 @@ echo "==> Node $("$node_bin" -v) at ${node_bin}"
 
 echo "==> Installing dependencies"
 corepack enable pnpm 2> /dev/null || npm install -g pnpm
-# --prod: the VPS runs the Harness, it doesn't typecheck or test it. tsx is a
-# runtime dependency, so the service still has what it needs.
+# --prod, and only so the Onboarding commands can run the sandcastle version
+# this repo pins rather than whatever npx resolves to.
 pnpm install --frozen-lockfile --prod
 
-# -------------------------------------------------------------- orchestrator
+# ----------------------------------------------------------------- the stack
 
-echo "==> Starting the Orchestrator"
-docker compose up -d --remove-orphans
+echo "==> Building and starting the stack"
+# --build: the Harness image is built from this checkout, so a re-deploy that
+# changed src/ has to rebuild before it can take effect.
+docker compose up -d --build --remove-orphans
 
-# ------------------------------------------------------------------- harness
-
-echo "==> Installing the Harness service"
-# Lingering is what makes the user service survive a reboot with nobody logged
-# in. Without it systemd tears the whole user manager down at logout.
-loginctl enable-linger "$USER" 2> /dev/null ||
-  sudo -n loginctl enable-linger "$USER" 2> /dev/null || {
-  echo "WARNING: could not enable lingering. The Harness will not survive a" >&2
-  echo "         reboot until you run: sudo loginctl enable-linger $USER" >&2
-}
-
-mkdir -p "$HOME/.config/systemd/user"
-sed -e "s|@REPO@|${repo}|g" -e "s|@NODE@|${node_bin}|g" \
-  systemd/sandcastle-harness.service \
-  > "$HOME/.config/systemd/user/sandcastle-harness.service"
-
-systemctl --user daemon-reload
-systemctl --user enable sandcastle-harness
-systemctl --user restart sandcastle-harness
+echo "==> Waiting for the Harness"
+# Resolved to a concrete default here because the exposure guard below
+# interpolates it into an alternation: PORT is commented out in .env.example,
+# and an empty branch makes that an invalid regex, which would fail the check
+# open.
+harness_port="$(env_value PORT)"
+harness_port="${harness_port:-3000}"
+ready=""
+for _ in $(seq 1 60); do
+  if curl -fsS -o /dev/null "http://127.0.0.1:${harness_port}/api/inngest"; then
+    ready=yes
+    break
+  fi
+  sleep 2
+done
+if [ -z "$ready" ]; then
+  echo "The Harness did not come up. Recent log:" >&2
+  docker compose logs --tail 40 harness >&2
+  exit 1
+fi
 
 echo "==> Installing host commands"
+# Dispatch and Onboarding still run on the host; the Harness itself no longer
+# does.
 mkdir -p "$HOME/.local/bin"
 for cmd in sandcastle-run init-project sync-env; do
   ln -sf "${repo}/scripts/vps/${cmd}" "$HOME/.local/bin/${cmd}"
@@ -191,36 +193,21 @@ ln -sf "$node_bin" "$HOME/.local/bin/node"
 
 # --------------------------------------------------------------------- check
 
-sleep 2
-if ! systemctl --user is-active --quiet sandcastle-harness; then
-  echo "The Harness service failed to start. Recent log:" >&2
-  journalctl --user -u sandcastle-harness -n 30 --no-pager >&2
-  exit 1
-fi
-
 # The Dispatch surface and the dashboard are both keyless, so reachability is
-# the whole of their access control — assert it rather than trust it. What
-# must hold on the host:
-#   - the Harness port: loopback, plus the docker bridge gateway (the one
-#     address the Orchestrator's container can reach; unroutable from outside);
-#   - 8288: loopback only (published there by compose);
+# the whole of their access control — assert it rather than trust it. What must
+# hold on the host:
+#   - the Harness port (resolved to a concrete default above — an empty branch
+#     in the alternation below would fail this check open) and 8288: loopback
+#     only, which is where compose publishes them;
 #   - 8289, 50052, 50053: absent. Inngest binds its connect gateway and gRPC
 #     ports on every interface and ignores --host for them; bridge networking
 #     is what keeps them inside the container, so their appearing here at all
-#     means the container is on host networking again.
-# Resolve the port to a concrete default first: PORT is commented out in
-# .env.example, and an empty branch here makes the alternation an invalid
-# regex, which would fail this check open.
-harness_port="$(env_value PORT)"
-harness_port="${harness_port:-3000}"
-bridge_ip="$(env_value DOCKER_BRIDGE_IP)"
-
+#     means a container ended up on host networking.
 exposed="$(
   ss -ltnH 2>/dev/null |
     awk '{print $4}' |
     grep -E ":(8288|8289|50052|50053|${harness_port})$" |
-    grep -vE '^(127\.0\.0\.1|\[::1\]|localhost):' |
-    grep -vxF "${bridge_ip}:${harness_port}" || true
+    grep -vE '^(127\.0\.0\.1|\[::1\]|localhost):' || true
 )"
 if [ -n "$exposed" ]; then
   echo "REFUSING TO FINISH: these are listening off-loopback:" >&2
@@ -230,7 +217,7 @@ if [ -n "$exposed" ]; then
 fi
 
 echo "==> Done."
-systemctl --user --no-pager --lines=0 status sandcastle-harness | head -3
+docker compose ps
 echo
 echo "    Onboard:  claude setup-token | init-project <project>"
 echo "    Dispatch: sandcastle-run <project> \"task\""

@@ -6,14 +6,14 @@ See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing de
 
 ## Architecture
 
-Two pieces on the VPS, neither reachable from outside it:
+Two containers on the Target, neither reachable from outside it:
 
-- **Orchestrator** — a self-hosted Inngest server, the one thing still in this repo's compose stack. Queues Dispatches, serializes Runs per Project (concurrency 1), and records Run history. Dashboard on 8288.
-- **Harness** — this repo's TypeScript app (`@ai-hero/sandcastle`), running as a **systemd user service** on the host rather than in a container, because that is where Docker and the Project checkouts natively live. It executes each Run: resolves the Project, ensures its image, and locks the branch strategy to a named Task Branch.
+- **Orchestrator** — a self-hosted Inngest server. Queues Dispatches, serializes Runs per Project (concurrency 1), and records Run history. Dashboard on 8288.
+- **Harness** — this repo's TypeScript app (`@ai-hero/sandcastle`), executing each Run: resolves the Project, ensures its image, and locks the branch strategy to a named Task Branch. It spawns each Sandbox as a sibling container through the Target engine's socket, and mounts the workspace root at the same path it has on the Target so those Sandboxes' bind mounts resolve. See [ADR 0006](docs/adr/0006-containerised-harness-and-installer-over-connectors.md).
 
 A Run only targets an **Onboarded** Project — a checkout with its own committed `.sandcastle/` directory. That Project's own `sandcastle:<dir-name>` image runs the Sandbox, and its own `.sandcastle/.env` supplies the agent token; the Harness holds neither. Dispatching to a checkout that was never Onboarded fails and tells you to Onboard it. When a Project's image is missing the Harness builds it once, and never rebuilds an existing one — so Dockerfile edits need a manual rebuild. See [ADR 0003](docs/adr/0003-strict-sandcastle-conventions-per-project-onboarding.md).
 
-Nothing listens on the public interface. The Dispatch surface is keyless — reachability *is* the access control. The Harness binds loopback plus the docker bridge gateway, so the Orchestrator's container can reach it — an address nothing off the host can route to. The Orchestrator is a bridged container that publishes only its dashboard, on loopback; its other listeners never leave the container. Remote access goes through an SSH tunnel, and the deploy refuses to finish if anything is listening where it shouldn't.
+Nothing listens on the public interface. The Dispatch surface is keyless — reachability *is* the access control. The two containers meet by service name on the compose network, and only two ports are published on the Target, both on loopback: the Dispatch surface and the dashboard. Every other listener stays inside its container. Remote access goes through an SSH tunnel, and the deploy refuses to finish if anything is listening where it shouldn't.
 
 ## Lifecycle
 
@@ -24,7 +24,9 @@ cp deploy.local.example deploy.local   # set SSH_TARGET=user@your-vps
 ./scripts/deploy.sh
 ```
 
-One command takes a fresh VPS to a running stack: it uploads the repo to `~/.sandcastle-vps`, installs Node 22 (user-local via nvm, no root) if it's missing, installs dependencies, seeds `~/.sandcastle-vps/.env`, starts the Orchestrator, installs and starts the Harness service with lingering enabled so it survives a reboot, and puts the host commands on your `PATH`.
+One command takes a fresh VPS to a running stack: it uploads the repo to `~/.sandcastle-vps`, seeds `~/.sandcastle-vps/.env`, builds the Harness image, brings both containers up, and puts the host commands on your `PATH`. Node is still installed there for the Onboarding commands, which have not moved into the Harness container yet.
+
+This deploy is interim: it is replaced by `npx @dworznik/sandcastle-vps`, which provisions a Target over a Connector with no checkout on either end.
 
 **Prerequisites.** The deploy installs Node and this repo's dependencies user-locally; everything else is yours to provide on the VPS: Docker Engine with the compose plugin (and your user in the `docker` group), plus `jq`, `curl`, `openssl`, `rsync`, `iproute2`, and `git`. On Debian: `sudo apt-get install -y docker-ce docker-compose-plugin jq curl openssl rsync iproute2 git`. Your own machine needs `ssh` and `rsync`. The deploy checks for all of this before it changes anything and names whatever is missing. `claude setup-token` runs wherever Claude Code is installed — on the VPS, or on your laptop piping over SSH: `claude setup-token | ssh your-vps 'bash -lc "init-project my-app"'`.
 
@@ -69,11 +71,10 @@ SANDCASTLE_DISPATCH_URL=http://127.0.0.1:3000 sandcastle-run my-app "..."
 ssh -L 8288:127.0.0.1:8288 your-vps    # then open http://127.0.0.1:8288
 ```
 
-The Harness logs to the journal:
+The Harness logs to its container:
 
 ```bash
-systemctl --user status sandcastle-harness
-journalctl --user -u sandcastle-harness -f
+docker compose logs -f harness    # on the VPS, in ~/.sandcastle-vps
 ```
 
 ## Development
