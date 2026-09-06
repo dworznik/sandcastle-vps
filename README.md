@@ -32,7 +32,7 @@ Re-running is idempotent and never overwrites an existing `.env` value. The firs
 
 ### 2. Set the agent's identity (once per VPS)
 
-Agent commits are yours — your name, your GitHub noreply address, a dedicated signing key registered on your account — so they show as **Verified** without a second account. The deploy creates `~/.sandcastle-vps/agent.env` (pre-filling name and email from your machine when `gh` is available), generates an ed25519 SSH signing key beside it, and prints the two steps only you can do: register the public key on GitHub as a *signing key*, and put a fine-grained PAT in `agent.env` as `GH_TOKEN` (Contents, Pull requests and Issues read/write, Metadata read, scoped to the Project repos). Then:
+Agent commits are yours — your name, an email verified on your GitHub account, a dedicated signing key registered on that account — so they show as **Verified** without a second account, and without your own signing key ever leaving your machine. The deploy creates `~/.sandcastle-vps/agent.env` (pre-filling name and email from your machine's git config), generates an ed25519 SSH signing key beside it, and prints the two steps only you can do: register the public key on GitHub as a *signing key*, and put a fine-grained PAT in `agent.env` as `GH_TOKEN` (Contents, Pull requests and Issues read/write, Metadata read, scoped to the Project repos). Then:
 
 ```bash
 sync-env

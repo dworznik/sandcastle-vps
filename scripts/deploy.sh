@@ -38,13 +38,13 @@ rsync -az --delete \
   "$repo_root/" "$SSH_TARGET:.sandcastle-vps/"
 
 # Defaults for the agent identity, taken from this machine: the operator's git
-# name, and the GitHub noreply address `gh` can derive — the one address GitHub
-# always treats as verified, which is what lets signed agent commits show as
-# Verified under the operator's own account. Seeded only where agent.env has
-# no value yet.
+# name and email — any address verified on their GitHub account makes signed
+# agent commits show as Verified under it. With no git email configured, fall
+# back to the GitHub noreply address `gh` can derive, which is always verified.
+# Seeded only where agent.env has no value yet.
 agent_name="$(git config user.name 2> /dev/null || true)"
-agent_email=""
-if command -v gh > /dev/null 2>&1; then
+agent_email="$(git config user.email 2> /dev/null || true)"
+if [ -z "$agent_email" ] && command -v gh > /dev/null 2>&1; then
   agent_email="$(gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"' 2> /dev/null || true)"
 fi
 
