@@ -30,23 +30,33 @@ One command takes a fresh VPS to a running stack: it uploads the repo to `~/.san
 
 Re-running is idempotent and never overwrites an existing `.env` value. The first deploy stops and asks you to fill in `WORKSPACE_ROOT` only if it can't be auto-detected from claude-tmux; Inngest keys are generated for you. Agent tokens are not in this file — they live in each Project's own `.sandcastle/.env`.
 
-### 2. Onboard a Project
+### 2. Set the agent's identity (once per VPS)
 
-A checkout can only receive Runs once it's been Onboarded. On the VPS host:
+Agent commits are yours — your name, your GitHub noreply address, a dedicated signing key registered on your account — so they show as **Verified** without a second account. The deploy creates `~/.sandcastle-vps/agent.env` (pre-filling name and email from your machine when `gh` is available), generates an ed25519 SSH signing key beside it, and prints the two steps only you can do: register the public key on GitHub as a *signing key*, and put a fine-grained PAT in `agent.env` as `GH_TOKEN` (Contents, Pull requests and Issues read/write, Metadata read, scoped to the Project repos). Then:
+
+```bash
+sync-env
+```
+
+The Harness never reads that file. `init-project` and `sync-env` stamp it into each Project's own `.sandcastle/` — the `.env` lines and a gitignored copy of the key — and every Run configures git inside the sandbox from what the Project carries: author, SSH signing, and `gh` as the credential helper so `git push` works over the Project's HTTPS remote (ADR 0003). Change anything in `agent.env` and run `sync-env` again to roll it out.
+
+### 3. Onboard a Project
+
+A checkout can only receive Runs once it's been Onboarded. On the VPS host, with the checkout under the workspace root and an HTTPS remote:
 
 ```bash
 claude setup-token | init-project my-app
 ```
 
-That scaffolds `.sandcastle/` with the real `sandcastle init`, appends this stack's skill set to the generated Dockerfile, seeds `.sandcastle/.env` with the token, and builds `sandcastle:my-app`. Commit the resulting `.sandcastle/` — its `.gitignore` already excludes the `.env`. Re-running on an Onboarded Project fails rather than overwriting your customizations.
+That scaffolds `.sandcastle/` with the real `sandcastle init`, appends this stack's extras to the generated Dockerfile, seeds `.sandcastle/.env` with the Claude token and the agent identity, copies the signing key in, and builds `sandcastle:my-app`. Commit the resulting `.sandcastle/` — its `.gitignore` already excludes the `.env` and the key. Re-running on an Onboarded Project fails rather than overwriting your customizations.
 
-The token is never stored centrally: it's supplied per invocation, and the only copies live in each Project's own `.sandcastle/.env`. To roll a reissued token across every Onboarded Project at once:
+The Claude token is never stored centrally: it's supplied per invocation, and the only copies live in each Project's own `.sandcastle/.env`. To roll a reissued token across every Onboarded Project at once:
 
 ```bash
 claude setup-token | sync-env
 ```
 
-### 3. Dispatch a Run
+### 4. Dispatch a Run
 
 On the VPS host:
 
@@ -63,7 +73,7 @@ ssh -L 3000:127.0.0.1:3000 your-vps
 SANDCASTLE_DISPATCH_URL=http://127.0.0.1:3000 sandcastle-run my-app "..."
 ```
 
-### 4. Watch it
+### 5. Watch it
 
 ```bash
 ssh -L 8288:127.0.0.1:8288 your-vps    # then open http://127.0.0.1:8288

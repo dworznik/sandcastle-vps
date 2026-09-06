@@ -1,5 +1,6 @@
 import { claudeCode, run } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { agentSandbox } from "../agent.js";
 import { taskBranch, validateBranch } from "../branch.js";
 import { env } from "../env.js";
 import { ensureSandboxImage } from "../image.js";
@@ -23,6 +24,9 @@ export const sandcastleRun = inngest.createFunction(
       : taskBranch(event.data.task);
     const model = event.data.model ?? env.defaultModel;
     const { imageName } = project;
+    // Identity, signing, and push credentials for the sandbox — all from the
+    // Project's own .sandcastle/, none from here.
+    const agent = agentSandbox(project);
 
     const { built } = await ensureSandboxImage(project);
     logger.info("starting run", {
@@ -39,7 +43,8 @@ export const sandcastleRun = inngest.createFunction(
       // No credentials from the harness: `cwd` anchors sandcastle's env
       // resolver on the Project's own .sandcastle/.env (ADR 0003).
       agent: claudeCode(model),
-      sandbox: docker({ imageName }),
+      sandbox: docker({ imageName, mounts: agent.mounts }),
+      hooks: agent.hooks,
       // Task Branch only — head/merge-to-head are forbidden on shared
       // checkouts. See ADR 0001.
       branchStrategy: { type: "branch", branch },

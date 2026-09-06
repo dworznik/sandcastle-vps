@@ -3,3 +3,7 @@ node_modules/
 deploy.local
 *.log
 .DS_Store
+# VPS-side agent identity; lives next to .env on the VPS, never in git
+agent.env
+agent_signing_key
+agent_signing_key.pub

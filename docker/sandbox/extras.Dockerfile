@@ -12,6 +12,11 @@
 # unprivileged agent user. Go back up for the install, then return — `skills
 # add --global` must run as agent to land in that user's own home.
 USER root
+# git signs commits with `ssh-keygen -Y sign`, which the base image does not
+# ship. The Harness configures SSH signing in the sandbox when the Project
+# carries a signing key.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
+  && rm -rf /var/lib/apt/lists/*
 ARG SKILLS_CLI_VERSION=1.5.17
 RUN npm install -g skills@${SKILLS_CLI_VERSION}
 

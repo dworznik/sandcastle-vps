@@ -32,13 +32,29 @@ rsync -az --delete \
   --exclude node_modules \
   --exclude deploy.local \
   --exclude .env \
+  --exclude agent.env \
+  --exclude agent_signing_key \
+  --exclude agent_signing_key.pub \
   "$repo_root/" "$SSH_TARGET:.sandcastle-vps/"
 
+# Defaults for the agent identity, taken from this machine: the operator's git
+# name, and the GitHub noreply address `gh` can derive — the one address GitHub
+# always treats as verified, which is what lets signed agent commits show as
+# Verified under the operator's own account. Seeded only where agent.env has
+# no value yet.
+agent_name="$(git config user.name 2> /dev/null || true)"
+agent_email=""
+if command -v gh > /dev/null 2>&1; then
+  agent_email="$(gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"' 2> /dev/null || true)"
+fi
+
 echo "==> Configuring the VPS"
-ssh "$SSH_TARGET" bash -s <<'REMOTE'
+ssh "$SSH_TARGET" bash -s -- "$agent_name" "$agent_email" <<'REMOTE'
 set -euo pipefail
 repo="$HOME/.sandcastle-vps"
 cd "$repo"
+agent_name_default="${1:-}"
+agent_email_default="${2:-}"
 
 # systemctl --user over ssh has no session bus unless we point at one.
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
@@ -51,13 +67,13 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 # matters most: the exposure guard at the end reads it, and without it that
 # check would pass on silence.
 missing=()
-for cmd in docker jq curl openssl ss git; do
+for cmd in docker jq curl openssl ss git ssh-keygen; do
   command -v "$cmd" > /dev/null 2>&1 || missing+=("$cmd")
 done
 docker compose version > /dev/null 2>&1 || missing+=("docker-compose-plugin")
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "Missing on this host: ${missing[*]}" >&2
-  echo "On Debian: sudo apt-get install -y docker-ce docker-compose-plugin jq curl openssl iproute2 git" >&2
+  echo "On Debian: sudo apt-get install -y docker-ce docker-compose-plugin jq curl openssl iproute2 git openssh-client" >&2
   echo "Docker Engine itself: https://docs.docker.com/engine/install/debian/" >&2
   exit 1
 fi
@@ -81,9 +97,10 @@ source scripts/vps/lib/env-file.sh
 
 ensure_env_key() { env_file_upsert .env "$1" "$2" seed; }
 
-env_value() {
-  grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true
+env_value_in() {
+  grep -E "^$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2- || true
 }
+env_value() { env_value_in .env "$1"; }
 
 ensure_env_key INNGEST_EVENT_KEY "$(openssl rand -hex 32)"
 ensure_env_key INNGEST_SIGNING_KEY "$(openssl rand -hex 32)"
@@ -122,6 +139,31 @@ if [ -z "$bridge_ip" ] && [ -z "$(env_value DOCKER_BRIDGE_IP)" ]; then
   exit 1
 fi
 [ -n "$bridge_ip" ] && ensure_env_key DOCKER_BRIDGE_IP "$bridge_ip"
+
+# ------------------------------------------------------------ agent identity
+
+# Who the agent is: defined here once, stamped into each Project by
+# init-project and sync-env, never read by the Harness itself (ADR 0003).
+# Seeded, never overwritten — the operator's edits win.
+[ -f agent.env ] || (umask 077 && cp agent.env.example agent.env)
+chmod 600 agent.env
+if [ -n "$agent_name_default" ]; then
+  env_file_upsert agent.env AGENT_GIT_NAME "$agent_name_default" seed
+fi
+if [ -n "$agent_email_default" ]; then
+  env_file_upsert agent.env AGENT_GIT_EMAIL "$agent_email_default" seed
+fi
+
+# An SSH signing key rather than GPG: one file, nothing to keep alive inside a
+# container, and GitHub verifies it the same way once the public half is
+# registered as a signing key.
+new_key=0
+if [ ! -f agent_signing_key ]; then
+  echo "==> Generating the agent's SSH signing key"
+  ssh-keygen -q -t ed25519 -N "" -C "sandcastle agent on $(hostname)" -f agent_signing_key
+  new_key=1
+fi
+chmod 600 agent_signing_key
 
 # ----------------------------------------------------------------- toolchain
 
@@ -235,4 +277,21 @@ echo
 echo "    Onboard:  claude setup-token | init-project <project>"
 echo "    Dispatch: sandcastle-run <project> \"task\""
 echo "    Dashboard: ssh -L 8288:127.0.0.1:8288 <this-host>, then open http://127.0.0.1:8288"
+
+# The two identity steps only a human can do, shown until they are done.
+gh_token_set=0
+[ -n "$(env_value_in agent.env GH_TOKEN)" ] && gh_token_set=1
+if [ "$new_key" -eq 1 ] || [ "$gh_token_set" -eq 0 ]; then
+  echo
+  echo "    Agent identity — finish once, then run sync-env on this host:"
+  if [ "$new_key" -eq 1 ]; then
+    echo "      · Register the agent's public key on GitHub as a SIGNING key"
+    echo "        (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key):"
+    echo "        $(cat agent_signing_key.pub)"
+  fi
+  if [ "$gh_token_set" -eq 0 ]; then
+    echo "      · Put a fine-grained PAT in ~/.sandcastle-vps/agent.env as GH_TOKEN"
+    echo "        (Contents RW, Pull requests RW, Issues RW, Metadata R; the Project repos only)"
+  fi
+fi
 REMOTE

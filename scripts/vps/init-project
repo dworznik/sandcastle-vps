@@ -21,6 +21,8 @@ here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 source "${here}/lib/common.sh"
 # shellcheck source=lib/env-file.sh
 source "${here}/lib/env-file.sh"
+# shellcheck source=lib/agent-identity.sh
+source "${here}/lib/agent-identity.sh"
 
 usage() {
   echo "Usage: [CLAUDE_CODE_OAUTH_TOKEN=...] init-project <project>" >&2
@@ -69,6 +71,12 @@ if [ ! -f "${dir}/.sandcastle/.env" ] && [ -f "${dir}/.sandcastle/.env.example" 
   (umask 077 && cp "${dir}/.sandcastle/.env.example" "${dir}/.sandcastle/.env")
 fi
 env_file_upsert "${dir}/.sandcastle/.env" CLAUDE_CODE_OAUTH_TOKEN "$token" seed
+
+echo "==> Stamping the agent identity"
+# Git author, GitHub token, signing key — defined once in ~/.sandcastle-vps and
+# copied here so this Project's sandbox has everything it needs to commit,
+# sign, and push. Nothing is held back centrally for the Harness to inject.
+stamp_agent_identity "${dir}/.sandcastle" seed
 
 echo "==> Building the Project's image"
 # Everything above this point has landed. Re-running init-project would now hit

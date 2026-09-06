@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# Stamp a reissued agent token into every Onboarded Project's .sandcastle/.env
-# in one pass. This is how token rotation works when no token is centralized:
-# each Project keeps its own copy, and this walks them (ADR 0003).
+# Push the agent's identity — and, when one is supplied, a reissued Claude
+# token — into every Onboarded Project's .sandcastle/ in one pass. This is how
+# rotation works when nothing is centralized for the Harness: each Project
+# keeps its own copy, and this walks them (ADR 0003).
 #
-# Only the token line changes; everything else in each .env is left alone.
+# Only the identity lines (and the token line, if given) change; everything
+# else in each .env is left alone.
 #
 # Usage:
-#   claude setup-token | sync-env
+#   sync-env                              # identity only, from ~/.sandcastle-vps/agent.env
+#   claude setup-token | sync-env         # identity + a new Claude token
 #   CLAUDE_CODE_OAUTH_TOKEN=... sync-env
 set -euo pipefail
 
@@ -18,16 +21,28 @@ here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 source "${here}/lib/common.sh"
 # shellcheck source=lib/env-file.sh
 source "${here}/lib/env-file.sh"
+# shellcheck source=lib/agent-identity.sh
+source "${here}/lib/agent-identity.sh"
 
 root="$(workspace_root)"
-token="$(read_agent_token)"
+# A token is optional here: with none on stdin or in the environment this
+# syncs the identity alone.
+token="$(read_agent_token 2> /dev/null || true)"
+
+if [ -z "$token" ] && [ ! -f "$(agent_env_file)" ] && [ ! -f "$(agent_signing_key)" ]; then
+  echo "Nothing to sync: no Claude token given, and no agent identity in $(agent_env_file)." >&2
+  exit 1
+fi
 
 updated=0
 for sandcastle_dir in "${root}"/*/.sandcastle; do
   # No Onboarded Projects: the glob comes back unexpanded.
   [ -d "$sandcastle_dir" ] || continue
   project="$(basename "$(dirname "$sandcastle_dir")")"
-  env_file_upsert "${sandcastle_dir}/.env" CLAUDE_CODE_OAUTH_TOKEN "$token" rotate
+  if [ -n "$token" ]; then
+    env_file_upsert "${sandcastle_dir}/.env" CLAUDE_CODE_OAUTH_TOKEN "$token" rotate
+  fi
+  stamp_agent_identity "$sandcastle_dir" rotate
   echo "  updated ${project}"
   updated=$((updated + 1))
 done
@@ -37,4 +52,8 @@ if [ "$updated" -eq 0 ]; then
   exit 1
 fi
 
-echo "Stamped the token into ${updated} Project(s)."
+if [ -n "$token" ]; then
+  echo "Stamped the identity and a new token into ${updated} Project(s)."
+else
+  echo "Stamped the identity into ${updated} Project(s)."
+fi
