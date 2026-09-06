@@ -86,3 +86,8 @@ export const writeTarget = async ({ name, ...fields }: TargetProfile): Promise<v
   await mkdir(targetsDir(), { recursive: true });
   await writeFile(path, `${JSON.stringify(parsed.data, null, 2)}\n`);
 };
+
+/** How a Target is named in output. Kind-agnostic on purpose: a Target may be
+ *  this machine, and "op@vps" is not a universal shape. */
+export const describeTarget = (profile: TargetProfile): string =>
+  `${profile.connector}: ${profile.host}`;

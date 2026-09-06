@@ -57,10 +57,14 @@ describe("evaluateProbe", () => {
   });
 
   it("fails when the operator cannot use the socket, and names them in the fix", () => {
-    const preflight = evaluateProbe(parseProbe(goodProbe.replace("docker-group\tyes", "docker-group\tno")));
+    const preflight = evaluateProbe(
+      parseProbe(
+        `${goodProbe.replace("docker-group\tyes", "docker-group\tno")}\ndocker-error\tdial unix /var/run/docker.sock: connect: permission denied`,
+      ),
+    );
     const group = preflight.checks.find((check) => check.id === "docker-group");
     expect(group?.ok).toBe(false);
-    expect(group?.remedy).toBe("usermod -aG docker op");
+    expect(group?.remedy).toBe("usermod -aG docker 'op'");
     // usermod alone doesn't take effect in the session that ran it.
     expect(group?.note).toMatch(/reconnect|log/i);
   });
@@ -72,6 +76,37 @@ describe("evaluateProbe", () => {
     expect(disk?.detail).toContain("2.0 GiB");
     // Nothing to run: the operator has to free space or pick another Target.
     expect(disk?.remedy).toBeUndefined();
+  });
+
+  // A stopped daemon and a socket the operator may not open both surface as
+  // "docker info failed", and only one of them is fixed by a usermod.
+  it("tells a stopped daemon apart from a permission problem", () => {
+    const stopped = evaluateProbe(
+      parseProbe(
+        `${goodProbe.replace("docker-group\tyes", "docker-group\tno")}\ndocker-error\tfailed to connect to the docker API at unix:///var/run/docker.sock; check if the daemon is running`,
+      ),
+    );
+    const check = stopped.checks.find((check) => check.id === "docker-group");
+    expect(check?.detail).toMatch(/daemon is not answering/);
+    expect(check?.remedy).toBe("systemctl start docker");
+  });
+
+  it("does not blame the socket on a Target that has no Docker at all", () => {
+    const check = evaluateProbe(parseProbe("user\top\n")).checks.find(
+      (check) => check.id === "docker-group",
+    );
+    expect(check?.detail).toMatch(/install Docker first/);
+    expect(check?.remedy).toBeUndefined();
+  });
+
+  // The remedy names an account and is run on the Target, so it is quoted like
+  // anything else that reaches a shell.
+  it("quotes the account name in the remedy", () => {
+    const probe = parseProbe(
+      `${goodProbe.replace("docker-group\tyes", "docker-group\tno").replace("user\top", "user\tan operator")}\ndocker-error\tconnect: permission denied`,
+    );
+    const check = evaluateProbe(probe).checks.find((check) => check.id === "docker-group");
+    expect(check?.remedy).toBe("usermod -aG docker 'an operator'");
   });
 
   it("accepts both architectures the images are built for", () => {

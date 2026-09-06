@@ -13,8 +13,6 @@ import type { Readable } from "node:stream";
  */
 export interface Connector {
   readonly kind: ConnectorKind;
-  /** How this Target is addressed, for display only (e.g. `ssh: op@vps`). */
-  readonly description: string;
   /**
    * Run a shell script on the Target and collect its output. Never throws for
    * a non-zero exit — the caller decides what a failure means.
@@ -28,8 +26,33 @@ export interface Connector {
 
 export type ConnectorKind = "ssh" | "orb" | "docker-desktop" | "docker-context";
 
+/**
+ * Everything the wizard needs to know about a kind of Target: what to call it,
+ * what to ask for as its address, and how to build a Connector for it. The
+ * wizard reads this and nothing else about kinds, which is what keeps adding
+ * one to a single file plus a line in the registry.
+ */
+export interface ConnectorDefinition {
+  readonly kind: ConnectorKind;
+  /** Shown when the operator is asked how a Target is reached. */
+  readonly label: string;
+  /** What to ask for — an ssh destination, a machine name, nothing at all. */
+  readonly addressLabel: string;
+  /** The issue that builds this kind, while it is still only filed. */
+  readonly issue?: number;
+  readonly create: (target: TargetAddress) => Connector;
+}
+
+/** The part of a Target profile a Connector needs to address it. */
+export interface TargetAddress {
+  readonly host: string;
+  readonly installDir: string;
+  readonly workspaceRoot: string;
+}
+
 export interface ExecOptions {
-  /** Fed to the script's stdin. */
+  /** Written to the script's stdin, which is why a Connector must not use
+   *  stdin for anything of its own — see docs/connectors.md. */
   readonly stdin?: string | Readable;
   /** Run the script as root. Only ever used after preflight reports
    *  `canElevate` — elevation that would prompt for a password has nowhere to
@@ -61,7 +84,6 @@ export interface PreflightCheck {
 }
 
 export interface Preflight {
-  /** True when every check passed. */
   readonly ok: boolean;
   readonly checks: readonly PreflightCheck[];
   /** Whether this Connector can run a remedy itself — that is, whether

@@ -1,25 +1,42 @@
-import type { TargetProfile } from "../profiles.js";
-import { sshConnector } from "./ssh.js";
-import type { Connector } from "./types.js";
-
-/** The connectors that are filed but not built, and where to follow them. */
-const DEFERRED: Record<string, { readonly what: string; readonly issue: number }> = {
-  orb: { what: "OrbStack machines", issue: 27 },
-  "docker-desktop": { what: "Docker Desktop on this machine", issue: 28 },
-  "docker-context": { what: "a remote engine over a docker context", issue: 29 },
-};
+import type { Connector, ConnectorDefinition, ConnectorKind } from "./types.js";
+import { sshDefinition } from "./ssh.js";
 
 /**
- * The one place a Connector kind becomes a Connector. Everything above this
- * line talks to the interface, which is what makes the deferred kinds a matter
- * of adding a file here rather than touching the wizard.
+ * Every kind of Target the wizard knows about, built or not. This list is the
+ * only place a kind is named: the wizard reads labels and address prompts from
+ * it, so building one of the deferred Connectors means writing its module and
+ * replacing its entry here — and touching nothing else.
  */
-export const connectorFor = (profile: TargetProfile): Connector => {
-  if (profile.connector === "ssh") {
-    return sshConnector(profile.host, profile.installDir);
-  }
-  const deferred = DEFERRED[profile.connector];
-  throw new Error(
-    `The "${profile.connector}" Connector (${deferred?.what}) is not built yet — see issue #${deferred?.issue}.`,
-  );
+const filed = (
+  kind: ConnectorKind,
+  what: string,
+  issue: number,
+): ConnectorDefinition => ({
+  kind,
+  label: `${what} — not built yet (#${issue})`,
+  addressLabel: "",
+  issue,
+  create: () => {
+    throw new Error(`The Connector for ${what} is not built yet — see issue #${issue}.`);
+  },
+});
+
+export const CONNECTORS: readonly ConnectorDefinition[] = [
+  sshDefinition,
+  filed("orb", "an OrbStack machine", 27),
+  filed("docker-desktop", "Docker Desktop on this machine", 28),
+  filed("docker-context", "a remote engine over a docker context", 29),
+];
+
+export const definitionFor = (kind: ConnectorKind): ConnectorDefinition => {
+  const definition = CONNECTORS.find((candidate) => candidate.kind === kind);
+  if (!definition) throw new Error(`Unknown Connector kind: ${kind}`);
+  return definition;
 };
+
+export const connectorFor = (target: {
+  readonly connector: ConnectorKind;
+  readonly host: string;
+  readonly installDir: string;
+  readonly workspaceRoot: string;
+}): Connector => definitionFor(target.connector).create(target);

@@ -9,12 +9,26 @@ The interface is `src/cli/connectors/types.ts`; the ssh implementation is
 `src/cli/connectors/ssh.ts`. Three kinds are filed but not built: OrbStack
 (#27), Docker Desktop (#28), and a remote engine over a docker context (#29).
 
+## Adding one
+
+Write the module, export a `ConnectorDefinition` beside its `Connector`, and
+replace the kind's placeholder entry in `CONNECTORS` (`connectors/index.ts`).
+Nothing above that line changes: the wizard reads the label, the address
+question and the factory from the registry, and never names a kind itself. The
+placeholder entries are what make an unbuilt kind fail with its issue number
+instead of a type error.
+
+A definition carries what the wizard needs to *ask* about a Target — the label
+in the "How is it reached?" list, and what its address is called (an ssh
+destination, a machine name, nothing at all for a Target that is this machine).
+There is no display field on `Connector` itself: a Target is described from its
+profile, because "op@vps" is not a universal shape.
+
 ## The contract
 
 ```ts
 interface Connector {
   readonly kind: "ssh" | "orb" | "docker-desktop" | "docker-context";
-  readonly description: string;
   exec(script: string, opts?: { stdin?: string | Readable; sudo?: boolean }): Promise<ExecResult>;
   putTar(stream: Readable, destDir: string): Promise<void>;
   preflight(): Promise<Preflight>;
@@ -48,7 +62,11 @@ stream is an `npm pack` tarball, whose entries are all under `package/`. Create
 the destination if it is missing. Do not require rsync — on either end.
 
 **`preflight` reports, it does not fix.** Return every check, passing and
-failing, with a `remedy` for the ones a command can fix. A remedy is stored
+failing, with a `remedy` for the ones a command can fix — and only when the
+command would really work. A check that can fail for several reasons has to
+tell them apart first: a Docker socket that will not open is a group membership
+on one Target and a stopped daemon on another, and a `usermod` printed for the
+second is a command that cannot help. A remedy is stored
 *without* `sudo`: the same string is printed for the operator (prefixed) and
 handed to `exec({ sudo: true })`, so the two can never disagree. Probe in one
 round trip — a check per round trip is a handshake per check on ssh Targets.

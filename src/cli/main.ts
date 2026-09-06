@@ -1,15 +1,35 @@
 import { createReadStream } from "node:fs";
 import { HELP, parseArgs } from "./args.js";
-import { connectorFor } from "./connectors/index.js";
-import type { Connector, Preflight } from "./connectors/types.js";
+import { CONNECTORS, connectorFor } from "./connectors/index.js";
+import type { Connector, Preflight, PreflightCheck } from "./connectors/types.js";
 import { packSelf, packageVersion } from "./package.js";
 import { formatPreflight, remedyCommand } from "./preflight.js";
 import { createPrompter, type Prompter } from "./prompt.js";
-import { listTargets, readTarget, targetsDir, validateTargetName, writeTarget, type TargetProfile } from "./profiles.js";
+import {
+  describeTarget,
+  listTargets,
+  readTarget,
+  targetsDir,
+  validateTargetName,
+  writeTarget,
+  type TargetProfile,
+} from "./profiles.js";
 
 /** What is filed but not built, so a menu entry can say so precisely. */
 const notBuiltYet = (what: string, issue: number): string =>
   `${what} is not built yet — see issue #${issue}.`;
+
+/** One Target, the way to reach it, and the operator answering questions.
+ *  These three travel everywhere together. */
+interface Session {
+  readonly profile: TargetProfile;
+  readonly connector: Connector;
+  readonly prompter: Prompter;
+}
+
+/** A failing check the wizard can actually offer to fix. */
+type Fixable = PreflightCheck & { readonly remedy: string };
+const isFixable = (check: PreflightCheck): check is Fixable => !check.ok && check.remedy !== undefined;
 
 /**
  * Create a Target profile. The Target is asked for its own home directory
@@ -19,38 +39,29 @@ const notBuiltYet = (what: string, issue: number): string =>
  */
 const createTarget = async (prompter: Prompter): Promise<TargetProfile> => {
   const name = validateTargetName(await prompter.text("A short name for this Target", "vps"));
-  const connectorKind = await prompter.select("How is it reached?", [
-    { label: "ssh — a machine you can ssh into", value: "ssh" as const },
-    {
-      label: "the other Connectors (OrbStack, Docker Desktop, docker context) — not built yet",
-      value: "deferred" as const,
-    },
-  ]);
-  if (connectorKind === "deferred") {
-    throw new Error(
-      "Only the ssh Connector exists so far. The others are filed as #27, #28 and #29.",
-    );
+  const definition = await prompter.select(
+    "How is it reached?",
+    CONNECTORS.map((candidate) => ({ label: candidate.label, value: candidate })),
+  );
+  if (definition.issue !== undefined) {
+    throw new Error(`${definition.label.split(" — ")[0]} is not built yet — see issue #${definition.issue}.`);
   }
 
-  const host = await prompter.text("ssh destination (anything your ssh understands, e.g. op@vps)");
+  const host = await prompter.text(definition.addressLabel);
 
-  // installDir is only read by preflight, which has not run yet — any value
-  // does for the one command below.
-  const { code, stdout, stderr } = await connectorFor({
-    name,
-    connector: "ssh",
-    host,
-    installDir: "/",
-    workspaceRoot: "/",
-  }).exec('printf "%s" "$HOME"');
+  // installDir and workspaceRoot are only read once the Target is being worked
+  // on, and the one command below reads neither — any value does for it.
+  const { code, stdout, stderr } = await definition
+    .create({ host, installDir: "/", workspaceRoot: "/" })
+    .exec('printf "%s" "$HOME"');
   if (code !== 0 || !stdout.startsWith("/")) {
-    throw new Error(`Could not reach ${host}: ${stderr.trim() || `ssh exited ${code}`}`);
+    throw new Error(`Could not reach the Target: ${stderr.trim() || `the check exited ${code}`}`);
   }
   const home = stdout.trim();
 
   const profile: TargetProfile = {
     name,
-    connector: "ssh",
+    connector: definition.kind,
     host,
     installDir: await prompter.text("Where should the stack be installed?", `${home}/.sandcastle-vps`),
     workspaceRoot: await prompter.text("Where do the Project checkouts live?", `${home}/work`),
@@ -75,13 +86,13 @@ const chooseTarget = async (prompter: Prompter, wanted?: string): Promise<Target
 };
 
 /** Run the checks and show them; offer to fix what can be fixed from here. */
-const checkTarget = async (connector: Connector, prompter: Prompter): Promise<Preflight> => {
-  console.log(`\nChecking the Target (${connector.description})…`);
+const checkTarget = async ({ profile, connector, prompter }: Session): Promise<Preflight> => {
+  console.log(`\nChecking the Target (${describeTarget(profile)})…`);
   let preflight = await connector.preflight();
   console.log(formatPreflight(preflight));
   if (preflight.ok) return preflight;
 
-  const fixable = preflight.checks.filter((check) => !check.ok && check.remedy);
+  const fixable = preflight.checks.filter(isFixable);
   if (fixable.length === 0) return preflight;
   if (!preflight.canElevate) {
     console.log("\nRun the commands above on the Target yourself — elevation here needs a password.");
@@ -93,7 +104,7 @@ const checkTarget = async (connector: Connector, prompter: Prompter): Promise<Pr
 
   for (const check of fixable) {
     console.log(`\n  ${remedyCommand(check)}`);
-    const { code, stderr } = await connector.exec(check.remedy as string, { sudo: true });
+    const { code, stderr } = await connector.exec(check.remedy, { sudo: true });
     if (code !== 0) {
       console.log(`  failed (exit ${code}): ${stderr.trim().split("\n").at(-1) ?? ""}`);
     }
@@ -109,19 +120,18 @@ const checkTarget = async (connector: Connector, prompter: Prompter): Promise<Pr
  * The package is what gets installed, so delivery is the CLI shipping its own
  * contents (ADR 0006). Bringing the stack up on top of them is #34.
  */
-const installUpgrade = async (
-  profile: TargetProfile,
-  connector: Connector,
-  prompter: Prompter,
-): Promise<void> => {
-  const preflight = await checkTarget(connector, prompter);
+const installUpgrade = async (session: Session): Promise<void> => {
+  const { profile, connector } = session;
+  const preflight = await checkTarget(session);
   if (!preflight.ok) {
     console.log("\nThe Target is not ready. Nothing was delivered.");
     return;
   }
 
   const version = await packageVersion();
-  console.log(`\nDelivering @dworznik/sandcastle-vps ${version} to ${profile.host}:${profile.installDir}…`);
+  console.log(
+    `\nDelivering @dworznik/sandcastle-vps ${version} to ${describeTarget(profile)} → ${profile.installDir}…`,
+  );
   const { tarball, cleanup } = await packSelf();
   try {
     await connector.putTar(createReadStream(tarball), profile.installDir);
@@ -132,13 +142,10 @@ const installUpgrade = async (
   console.log(`\n${notBuiltYet("Building the Harness image and starting the stack", 34)}`);
 };
 
-const menu = async (
-  profile: TargetProfile,
-  connector: Connector,
-  prompter: Prompter,
-): Promise<void> => {
+const menu = async (session: Session): Promise<void> => {
+  const { profile, prompter } = session;
   for (;;) {
-    const action = await prompter.select(`Target ${profile.name} (${connector.description})`, [
+    const action = await prompter.select(`Target ${profile.name} (${describeTarget(profile)})`, [
       { label: "Install / upgrade", value: "install" as const },
       { label: "Add a Project", value: "project" as const },
       { label: "Rotate credentials", value: "rotate" as const },
@@ -146,7 +153,7 @@ const menu = async (
       { label: "Quit", value: "quit" as const },
     ]);
     if (action === "quit") return;
-    if (action === "install") await installUpgrade(profile, connector, prompter);
+    if (action === "install") await installUpgrade(session);
     if (action === "project") console.log(`\n${notBuiltYet("Adding a Project", 36)}`);
     if (action === "rotate") console.log(`\n${notBuiltYet("Rotating credentials", 37)}`);
     if (action === "status") console.log(`\n${notBuiltYet("Status", 37)}`);
@@ -164,7 +171,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
     console.log(`sandcastle-vps ${await packageVersion()}`);
     prompter = createPrompter();
     const profile = await chooseTarget(prompter, args.target);
-    await menu(profile, connectorFor(profile), prompter);
+    await menu({ profile, connector: connectorFor(profile), prompter });
     return 0;
   } catch (error) {
     console.error(`\n${error instanceof Error ? error.message : String(error)}`);

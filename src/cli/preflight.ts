@@ -30,6 +30,11 @@ if docker info > /dev/null 2>&1; then
   printf 'docker-group\\tyes\\n'
 else
   printf 'docker-group\\tno\\n'
+  # Why it failed decides the fix: a socket the operator may not open is a
+  # group problem, a daemon that is not running is not. Take the last line
+  # rather than matching a phrase — Docker rewords these between versions, and
+  # the evaluation reads it as evidence rather than as a known string.
+  printf 'docker-error\\t%s\\n' "$(docker info 2>&1 | tail -1 | tr -d '\\t')"
 fi
 # The install directory may not exist yet, so measure the nearest ancestor that
 # does — that is the filesystem it will land on.
@@ -54,8 +59,50 @@ export const parseProbe = (stdout: string): Record<string, string> => {
 
 const gibibytes = (kib: number): string => `${(kib / 1024 / 1024).toFixed(1)} GiB`;
 
+/**
+ * The socket check has three failing shapes, and only one of them is a group
+ * membership the operator can be added to. Reporting the other two as a
+ * `usermod` would be a command that cannot work.
+ */
+const socketCheck = (probe: Record<string, string>, user: string | undefined): PreflightCheck => {
+  const who = user ?? "the operator";
+  const error = probe["docker-error"] ?? "";
+
+  if (probe["docker-group"] === "yes") {
+    return { id: "docker-group", ok: true, detail: `${who} can use the Docker socket` };
+  }
+  if (!probe.docker) {
+    return { id: "docker-group", ok: false, detail: "not checked — install Docker first" };
+  }
+  if (/permission denied/i.test(error)) {
+    return {
+      id: "docker-group",
+      ok: false,
+      detail: `${who} may not open the Docker socket`,
+      // No name, no command: the remedy names an account, and inventing one
+      // would produce something that looks runnable and is not.
+      remedy: user === undefined ? undefined : `usermod -aG docker ${shellQuote(user)}`,
+      needsSudo: user === undefined ? undefined : true,
+      note: "Group membership only applies to new sessions — reconnect afterwards.",
+    };
+  }
+  if (error) {
+    // Anything else the daemon says is not a permission problem, and a usermod
+    // printed here would be a command that cannot help.
+    return {
+      id: "docker-group",
+      ok: false,
+      detail: `the Docker daemon is not answering — ${error}`,
+      remedy: "systemctl start docker",
+      needsSudo: true,
+      note: "If Docker was only just installed, its daemon may never have been started.",
+    };
+  }
+  return { id: "docker-group", ok: false, detail: `${who} cannot use the Docker socket` };
+};
+
 export const evaluateProbe = (probe: Record<string, string>): Preflight => {
-  const user = probe.user ?? "the operator";
+  const user = probe.user;
   const freeKib = Number(probe.disk);
   const arch = probe.arch ?? "";
 
@@ -80,16 +127,7 @@ export const evaluateProbe = (probe: Record<string, string>): Preflight => {
           needsSudo: true,
           note: "Debian and Ubuntu; elsewhere install your distribution's docker-compose-plugin.",
         },
-    probe["docker-group"] === "yes"
-      ? { id: "docker-group", ok: true, detail: `${user} can use the Docker socket` }
-      : {
-          id: "docker-group",
-          ok: false,
-          detail: `${user} cannot use the Docker socket`,
-          remedy: `usermod -aG docker ${user}`,
-          needsSudo: true,
-          note: "Group membership only applies to new sessions — reconnect afterwards.",
-        },
+    socketCheck(probe, user),
     Number.isFinite(freeKib) && freeKib >= MIN_FREE_KIB
       ? { id: "disk", ok: true, detail: `${gibibytes(freeKib)} free` }
       : {
@@ -114,7 +152,7 @@ export const evaluateProbe = (probe: Record<string, string>): Preflight => {
     ok: checks.every((check) => check.ok),
     checks,
     canElevate: probe.sudo === "yes",
-    user,
+    user: user ?? "the operator",
   };
 };
 

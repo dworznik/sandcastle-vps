@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sshArgs } from "./ssh.js";
+import { extractCommand, sshArgs } from "./ssh.js";
 
 describe("sshArgs", () => {
   it("addresses the Target and hands the script to bash, not to the login shell", () => {
@@ -26,5 +26,17 @@ describe("sshArgs", () => {
     const [, remote] = sshArgs("ignored", "printf '%s' \"$BASH_VERSION\"");
     const { stdout } = await promisify(execFile)("sh", ["-c", remote as string]);
     expect(stdout).not.toBe("");
+  });
+});
+
+describe("extractCommand", () => {
+  it("creates the destination and unwraps the tarball's single root entry", () => {
+    expect(extractCommand("/home/op/.sandcastle-vps")).toBe(
+      "mkdir -p '/home/op/.sandcastle-vps' && tar -xzf - -C '/home/op/.sandcastle-vps' --strip-components=1",
+    );
+  });
+
+  it("quotes a destination a shell would otherwise split", () => {
+    expect(extractCommand("/home/op/my dir")).toContain("'/home/op/my dir'");
   });
 });

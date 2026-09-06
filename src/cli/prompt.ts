@@ -17,8 +17,12 @@ export interface Prompter {
  * are Target names and paths, and the ones that are secrets are not asked
  * here — credential capture owns its own hidden prompts.
  */
-export const createPrompter = (): Prompter => {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+export const createPrompter = (
+  input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Prompter => {
+  const rl = createInterface({ input, output });
+  const say = (line: string) => output.write(`${line}\n`);
 
   // Lines are buffered as they arrive rather than pulled one question at a
   // time: piped input reaches EOF long before the last question is asked, and
@@ -40,12 +44,12 @@ export const createPrompter = (): Prompter => {
   });
 
   const ask = async (query: string): Promise<string> => {
-    process.stdout.write(query);
+    output.write(query);
     const buffered = pending.shift();
     if (buffered !== undefined) {
       // Echo it: a piped answer never appeared on the terminal by itself, and
       // a transcript with questions and no answers is unreadable.
-      if (!process.stdin.isTTY) process.stdout.write(`${buffered}\n`);
+      if (!input.isTTY) say(buffered);
       return buffered.trim();
     }
     if (ended) throw new Error("Input ended before the question was answered.");
@@ -59,18 +63,18 @@ export const createPrompter = (): Prompter => {
       const answer = await ask(fallback === undefined ? `${question}: ` : `${question} [${fallback}]: `);
       if (answer) return answer;
       if (fallback !== undefined) return fallback;
-      console.log("  An answer is needed.");
+      say("  An answer is needed.");
     }
   };
 
   const select: Prompter["select"] = async <T>(question: string, choices: readonly Choice<T>[]) => {
-    console.log(`\n${question}`);
-    choices.forEach((choice, index) => console.log(`  ${index + 1}) ${choice.label}`));
+    say(`\n${question}`);
+    choices.forEach((choice, index) => say(`  ${index + 1}) ${choice.label}`));
     for (;;) {
       const answer = await ask("  > ");
       const choice = choices[Number(answer) - 1];
       if (choice) return choice.value;
-      console.log(`  Pick a number between 1 and ${choices.length}.`);
+      say(`  Pick a number between 1 and ${choices.length}.`);
     }
   };
 
