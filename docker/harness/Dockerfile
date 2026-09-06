@@ -30,10 +30,18 @@ RUN corepack enable
 
 # pnpm-workspace.yaml carries the build-script approvals, and pnpm fails the
 # install without it — tsx's esbuild binary is fetched by one of them.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+#
+# The lockfile is optional, hence the bracket glob: npm refuses to publish a
+# root lockfile whatever `files` says, so the package a Target is installed
+# from — this package, shipped over the Connector — cannot carry one. A
+# checkout still builds from the lockfile it has; a delivered package resolves
+# the manifest's ranges, as any consumer of a published package does. The
+# pattern shares a COPY with sources that always match, because a COPY whose
+# every pattern matches nothing is an error.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yam[l] ./
 # --prod: the Target runs the Harness, it does not typecheck or test it. tsx is
 # a runtime dependency, so this still has everything the server needs.
-RUN pnpm install --frozen-lockfile --prod
+RUN if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile --prod; else pnpm install --prod; fi
 
 COPY tsconfig.json ./
 COPY src ./src
