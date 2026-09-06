@@ -28,5 +28,14 @@ The named git branch where a Run's commits land. Agent work only ever becomes vi
 ### Sandbox
 The isolated container sandcastle spawns for a single Run, containing the agent (Claude Code) and the Project's worktree. Ephemeral — exists only for the duration of the Run — and built from the Project's own image, never a shared one.
 
+### Loop
+The autonomous cycle that carries an issue from `ready-for-agent` to a merged pull request without a human at each step: triage, Dispatch, delivery, review, and repair. The human's only gates are filing the issue and merging the pull request.
+
+### Phase
+Where an issue sits in the Loop at a given moment — awaiting Dispatch, running, awaiting review, repairing, escalated. A Phase is what the Loop reads to decide its next action; it is not a Run's execution status, and no Orchestrator reports it.
+
+### Limit Gate
+The account-wide point past which no Run may start, because the Claude subscription's usage window is exhausted. The quota is shared across every Project, so the gate defers all queued Dispatches — not only the Run that hit the limit.
+
 ### Local Config
 Machine-specific settings kept out of version control. Three layers: the deploy target (on the operator's machine), the Harness's runtime settings (on the VPS), and each Project's own credentials (inside that Project's checkout).
