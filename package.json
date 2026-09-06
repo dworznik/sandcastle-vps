@@ -1,9 +1,28 @@
 {
-  "name": "sandcastle-vps",
+  "name": "@dworznik/sandcastle-vps",
   "version": "0.1.0",
-  "private": true,
-  "description": "Sandcastle harness: dispatch background agent Runs against project checkouts on the VPS",
+  "description": "Install and run the sandcastle platform on a Target: the creator CLI, and the Harness it delivers",
   "type": "module",
+  "bin": {
+    "sandcastle-vps": "bin/sandcastle-vps.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "!src/**/*.test.ts",
+    "docker",
+    "compose.yaml",
+    ".env.example",
+    "tsconfig.json",
+    "pnpm-workspace.yaml"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dworznik/sandcastle-vps.git"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -11,7 +30,8 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cli": "tsx src/cli/main.ts"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.12.0",
