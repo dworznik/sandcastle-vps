@@ -182,6 +182,12 @@ mkdir -p "$HOME/.local/bin"
 for cmd in sandcastle-run init-project sync-env; do
   ln -sf "${repo}/scripts/vps/${cmd}" "$HOME/.local/bin/${cmd}"
 done
+# The Onboarding commands run sandcastle with `node`, and nvm only puts node on
+# PATH for *interactive* shells: Debian's ~/.bashrc returns early otherwise, so
+# `ssh host 'bash -lc init-project …'` found the command but not node.
+# ~/.local/bin is on PATH for every login shell via ~/.profile — the mechanism
+# the commands above already rely on — so link the resolved node there too.
+ln -sf "$node_bin" "$HOME/.local/bin/node"
 
 # --------------------------------------------------------------------- check
 

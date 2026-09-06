@@ -42,6 +42,11 @@ sandcastle() {
   repo_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../.." && pwd)"
   cli="${repo_root}/node_modules/@ai-hero/sandcastle/dist/main.js"
   if [ -f "$cli" ]; then
+    if ! command -v node > /dev/null 2>&1; then
+      echo "node is not on PATH. The deploy links it into ~/.local/bin — re-run" >&2
+      echo "the deploy, or run this from a login shell (bash -l)." >&2
+      return 1
+    fi
     node "$cli" "$@"
     return
   fi
