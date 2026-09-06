@@ -62,12 +62,26 @@ fi
 # point SANDCASTLE_DISPATCH_URL at your end of it.
 dispatch_urls+=("http://127.0.0.1:${PORT:-3000}")
 
+# Two different failures must read differently: a harness that cannot be
+# reached (try the next URL) and a harness that answered with a rejection —
+# the Project is not Onboarded, the payload is malformed — which is final and
+# carries the reason in its body. `curl -f` would collapse both into "failed",
+# so the status is read explicitly and the body is always shown.
 for url in "${dispatch_urls[@]}"; do
-  if response="$(curl -fsS --max-time 10 -X POST "$url/dispatch" \
-    -H 'content-type: application/json' -d "$payload" 2>/dev/null)"; then
-    echo "Dispatched to $url: $response"
-    exit 0
-  fi
+  response="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST "$url/dispatch" \
+    -H 'content-type: application/json' -d "$payload" 2>/dev/null)" || continue
+  status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  case "$status" in
+    2*)
+      echo "Dispatched to $url: $body"
+      exit 0
+      ;;
+    *)
+      echo "The harness at $url rejected the Dispatch (HTTP $status): $body" >&2
+      exit 1
+      ;;
+  esac
 done
 
 echo "Failed to reach the sandcastle harness at: ${dispatch_urls[*]}" >&2
