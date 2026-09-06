@@ -19,6 +19,13 @@ fi
 source "$repo_root/deploy.local"
 : "${SSH_TARGET:?deploy.local must set SSH_TARGET=user@host}"
 
+# rsync has to exist on the far end before anything else can happen, and its
+# own error for a missing remote binary is unhelpful. Ask first.
+if ! ssh "$SSH_TARGET" 'command -v rsync > /dev/null'; then
+  echo "rsync is not installed on $SSH_TARGET. On Debian: sudo apt-get install -y rsync" >&2
+  exit 1
+fi
+
 echo "==> Uploading to $SSH_TARGET:~/.sandcastle-vps"
 rsync -az --delete \
   --exclude .git \
@@ -35,6 +42,30 @@ cd "$repo"
 
 # systemctl --user over ssh has no session bus unless we point at one.
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+# ------------------------------------------------------------- prerequisites
+
+# Everything this deploy installs is user-local: Node, pnpm, this repo. The
+# system packages it leans on are the operator's to provide, so check for all
+# of them here, before anything is touched, and name what is missing. `ss`
+# matters most: the exposure guard at the end reads it, and without it that
+# check would pass on silence.
+missing=()
+for cmd in docker jq curl openssl ss git; do
+  command -v "$cmd" > /dev/null 2>&1 || missing+=("$cmd")
+done
+docker compose version > /dev/null 2>&1 || missing+=("docker-compose-plugin")
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "Missing on this host: ${missing[*]}" >&2
+  echo "On Debian: sudo apt-get install -y docker-ce docker-compose-plugin jq curl openssl iproute2 git" >&2
+  echo "Docker Engine itself: https://docs.docker.com/engine/install/debian/" >&2
+  exit 1
+fi
+if ! docker info > /dev/null 2>&1; then
+  echo "Docker is installed but $USER cannot use it. Join the docker group and log in again:" >&2
+  echo "  sudo usermod -aG docker $USER" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------- environment
 

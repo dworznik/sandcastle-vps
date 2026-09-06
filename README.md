@@ -26,6 +26,8 @@ cp deploy.local.example deploy.local   # set SSH_TARGET=user@your-vps
 
 One command takes a fresh VPS to a running stack: it uploads the repo to `~/.sandcastle-vps`, installs Node 22 (user-local via nvm, no root) if it's missing, installs dependencies, seeds `~/.sandcastle-vps/.env`, starts the Orchestrator, installs and starts the Harness service with lingering enabled so it survives a reboot, and puts the host commands on your `PATH`.
 
+**Prerequisites.** The deploy installs Node and this repo's dependencies user-locally; everything else is yours to provide on the VPS: Docker Engine with the compose plugin (and your user in the `docker` group), plus `jq`, `curl`, `openssl`, `rsync`, `iproute2`, and `git`. On Debian: `sudo apt-get install -y docker-ce docker-compose-plugin jq curl openssl rsync iproute2 git`. Your own machine needs `ssh` and `rsync`. The deploy checks for all of this before it changes anything and names whatever is missing. `claude setup-token` runs wherever Claude Code is installed — on the VPS, or on your laptop piping over SSH: `claude setup-token | ssh your-vps 'bash -lc "init-project my-app"'`.
+
 Re-running is idempotent and never overwrites an existing `.env` value. The first deploy stops and asks you to fill in `WORKSPACE_ROOT` only if it can't be auto-detected from claude-tmux; Inngest keys are generated for you. Agent tokens are not in this file — they live in each Project's own `.sandcastle/.env`.
 
 ### 2. Onboard a Project
