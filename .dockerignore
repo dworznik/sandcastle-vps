@@ -1,0 +1,8 @@
+# The build context is the repo root, and the image installs its own
+# dependencies — never ship the host's.
+.git
+node_modules
+.env
+deploy.local
+docs
+scripts

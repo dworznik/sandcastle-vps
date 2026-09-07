@@ -61,15 +61,25 @@ sandcastle() {
 # The agent token, supplied per invocation and never stored centrally: from the
 # environment, or piped in (`claude setup-token | init-project my-app`). The
 # only copy that persists is the one in each Project's own .sandcastle/.env.
+#
+# The token is *extracted* from the stream rather than taken whole, because
+# `claude setup-token` prints explanatory text around it. Reading all of stdin
+# and stripping whitespace — which this used to do — silently produced a token
+# with the banner concatenated onto it, and the first sign of that was an
+# authentication failure inside a Run, hours downstream of the cause.
 read_agent_token() {
   local token="${CLAUDE_CODE_OAUTH_TOKEN:-}"
   if [ -z "$token" ] && [ ! -t 0 ]; then
-    token="$(cat)"
+    # Last match wins: instructions that mention a token tend to come before
+    # the real one. An unrecognizable stream yields nothing and fails below,
+    # which is the point — better than stamping something that cannot work.
+    token="$(grep -oE 'sk-ant-[A-Za-z0-9_-]{20,}' | tail -1)"
   fi
   token="$(echo "$token" | tr -d '[:space:]')"
   if [ -z "$token" ]; then
     echo "No agent token. Pass CLAUDE_CODE_OAUTH_TOKEN=... or pipe one in:" >&2
     echo "  claude setup-token | $(basename "$0") ..." >&2
+    echo "Piped input is scanned for an sk-ant-… token; nothing matched." >&2
     return 1
   fi
   echo "$token"

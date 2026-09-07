@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 720" width="1300" height="720" role="img">
+  <title>Sandcastle host topology</title>
+  <desc>Two hosts side by side. Left: your Mac, holding the claude CLI, the deploy script and a browser, and inside it the OrbStack machine sandcastle-vps. Its Docker engine holds one compose project, sandcastle-vps, whose two services — the Harness and inngest — sit on one network and reach each other by service name; the Harness mounts the engine socket and the workspace root at the same path, and spawns one ephemeral sandbox container per Run as a sibling of itself rather than a compose service. Below them, the filesystem: the install directory and the ~/work checkouts. Right: the real VPS, where this session runs inside the claude-tmux-dev container that bind-mounts /home/patryk and the Docker socket; the same compose project and the per-Run sandboxes are drawn dashed because they are not deployed there yet. Sandboxes and claude-tmux-dev share the checkout on disk, never a container.</desc>
+  <style>
+    /* Standalone copy of the page's tokens. A committed SVG is usually viewed
+       as an image, which loads no external stylesheet and no webfont — hence
+       the fallback stacks and the explicit background below. */
+    :root{
+      --bg:#F3F5F7; --surface:#FFFFFF; --ink:#1B2430; --muted:#5F6B77; --line:#C9D1D9; --lane:#E9EDF1;
+      --decided:#1F7A6D; --decided-tint:#DFF1EC; --open:#B9601F; --open-tint:#FBEBDD; --here:#2F5FBF; --here-tint:#E3EBFA;
+      --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+      --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    }
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg:#141A21; --surface:#1C242D; --ink:#E6EAEE; --muted:#98A3AE; --line:#34404C; --lane:#1A222B;
+        --decided:#4FB8A6; --decided-tint:#173B36; --open:#E8975A; --open-tint:#3F2A18; --here:#7FA3F0; --here-tint:#1E2C48;
+      }
+    }
+    svg{font-family:var(--mono);color:var(--ink)}
+    .bgfill{fill:var(--bg)}
+    .host{fill:var(--lane);stroke:var(--line);stroke-width:1}
+    .host-t{font-family:var(--sans);font-size:14px;font-weight:600;fill:currentColor}
+    .host-s{font-size:11px;fill:var(--muted)}
+    .group{fill:var(--surface);stroke:var(--line);stroke-width:1;stroke-dasharray:3 3}
+    .group.solid{stroke-dasharray:none}
+    .group-t{font-size:11.5px;letter-spacing:.06em;fill:var(--muted);font-weight:500}
+    .node rect{fill:var(--surface);stroke:currentColor;stroke-width:1.4}
+    .node.open rect{stroke:var(--open);fill:var(--open-tint);stroke-dasharray:5 4}
+    .node.here rect{stroke:var(--here);fill:var(--here-tint);stroke-width:2.5}
+    .node.faint rect{stroke:var(--line);fill:var(--lane)}
+    .node .t{font-family:var(--sans);font-size:12.5px;font-weight:600;fill:currentColor}
+    .node .s{font-size:10.5px;fill:var(--muted)}
+    .node.open .s{fill:var(--open)} .node.here .s{fill:var(--here)} .node.faint .t{fill:var(--muted);font-weight:500}
+    .edge{fill:none;stroke:currentColor;stroke-width:1.4}
+    .edge.open{stroke:var(--open);stroke-dasharray:5 4} .edge.dec{stroke:var(--decided)} .edge.thin{stroke:var(--line)}
+    .lbl{font-size:10.5px;fill:var(--muted)} .lbl.open{fill:var(--open)} .lbl.dec{fill:var(--decided)} .lbl.here{fill:var(--here)}
+    .bar{fill:var(--surface);stroke:currentColor;stroke-width:1.4}
+    .bar.here{stroke:var(--here);fill:var(--here-tint);stroke-width:2}
+    .bar.run{fill:var(--decided-tint);stroke:var(--decided)}
+    .axis{stroke:var(--line)}
+  </style>
+  <rect class="bgfill" width="100%" height="100%"/>
+
+<defs>
+  <marker id="a-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+  <marker id="a-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--open)"/></marker>
+  <marker id="a-dec" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--decided)"/></marker>
+</defs>
+
+<!-- ============ LEFT HOST: the Mac ============ -->
+<rect class="host" x="20" y="24" width="610" height="680" rx="8"/>
+<text class="host-t" x="40" y="52">Your Mac</text>
+<text class="host-s" x="150" y="52">dev machine · OrbStack</text>
+
+<g class="node"><rect x="40" y="70" width="150" height="46" rx="4"/><text class="t" x="52" y="89">claude setup-token</text><text class="s" x="52" y="105">mints the Claude token</text></g>
+<g class="node"><rect x="210" y="70" width="170" height="46" rx="4"/><text class="t" x="222" y="89">scripts/deploy.sh</text><text class="s" x="222" y="105">rsync + ssh, no root</text></g>
+<g class="node"><rect x="400" y="70" width="210" height="46" rx="4"/><text class="t" x="412" y="89">browser → :8288</text><text class="s" x="412" y="105">via ssh -L 8288:127.0.0.1:8288</text></g>
+
+<!-- OrbStack machine -->
+<rect class="group solid" x="40" y="150" width="570" height="540" rx="6"/>
+<text class="group-t" x="56" y="172">ORBSTACK MACHINE · sandcastle-vps · Debian 12 · stand-in for the VPS</text>
+
+<rect class="group solid" x="60" y="185" width="530" height="300" rx="6"/>
+<text class="group-t" x="76" y="207">DOCKER ENGINE · installed inside the machine</text>
+
+<!-- the compose project: both halves of the platform -->
+<rect class="group" x="76" y="214" width="498" height="120" rx="6"/>
+<text class="group-t" x="88" y="232">COMPOSE PROJECT · sandcastle-vps · one network</text>
+
+<g class="node"><rect x="92" y="242" width="200" height="80" rx="4"/><text class="t" x="104" y="262">harness</text><text class="s" x="104" y="278">no host process</text><text class="s" x="104" y="292">mounts the socket + ~/work</text><text class="s" x="104" y="306">publishes 127.0.0.1:3000</text></g>
+<g class="node"><rect x="350" y="242" width="200" height="80" rx="4"/><text class="t" x="362" y="262">inngest v1.44.0</text><text class="s" x="362" y="278">Orchestrator</text><text class="s" x="362" y="292">sdk-url → harness:3000</text><text class="s" x="362" y="306">publishes 127.0.0.1:8288</text></g>
+<line class="edge dec" x1="348" y1="282" x2="294" y2="282" marker-end="url(#a-dec)"/>
+<text class="lbl dec" x="321" y="272" text-anchor="middle">syncs +</text>
+<text class="lbl dec" x="321" y="300" text-anchor="middle">invokes</text>
+
+<!-- stacked sandbox to suggest one-per-run -->
+<rect class="node" x="346" y="366" width="230" height="64" rx="4" style="fill:var(--lane);stroke:var(--line);stroke-width:1.4"/>
+<rect class="node" x="338" y="369" width="230" height="64" rx="4" style="fill:var(--lane);stroke:var(--line);stroke-width:1.4"/>
+<g class="node"><rect x="330" y="372" width="230" height="64" rx="4"/><text class="t" x="342" y="391">sandcastle-&lt;uuid&gt;</text><text class="s" x="342" y="406">one per Run · project image</text><text class="s" x="342" y="420">a sibling, not a service</text></g>
+<text class="lbl" x="330" y="458">Claude Code + gh + skills, as user agent</text>
+
+<rect class="group solid" x="60" y="498" width="530" height="172" rx="6"/>
+<text class="group-t" x="76" y="520">FILESYSTEM · /home/patryk</text>
+<g class="node"><rect x="80" y="540" width="230" height="62" rx="4"/><text class="t" x="92" y="559">~/.sandcastle-vps/</text><text class="s" x="92" y="574">the package + compose.yaml</text><text class="s" x="92" y="588">.env · paths, UIDs, Inngest keys</text></g>
+<g class="node"><rect x="330" y="540" width="230" height="62" rx="4"/><text class="t" x="342" y="559">~/work/&lt;project&gt;/</text><text class="s" x="342" y="574">checkout · .sandcastle/ · image</text><text class="s" x="342" y="588">.sandcastle/worktrees/&lt;branch&gt;</text></g>
+<text class="lbl" x="80" y="626">Task Branch commits land here — on disk, not in any container</text>
+<text class="lbl" x="80" y="646">the Harness mounts ~/work at that same path, so a sandbox's binds are host paths</text>
+
+<!-- edges, Mac -->
+<line class="edge" x1="295" y1="116" x2="295" y2="148" marker-end="url(#a-ink)"/>
+<text class="lbl" x="303" y="138">ssh sandcastle-vps@orb</text>
+<line class="edge" x1="505" y1="116" x2="505" y2="240" marker-end="url(#a-ink)"/>
+<text class="lbl" x="512" y="200">tunnel → dashboard</text>
+<path class="edge" d="M192,322 L192,390 L328,390" marker-end="url(#a-ink)"/>
+<text class="lbl" x="200" y="382">docker run, per Run</text>
+<line class="edge" x1="195" y1="538" x2="195" y2="336" marker-end="url(#a-ink)"/>
+<text class="lbl" x="203" y="420">compose up -d</text>
+<line class="edge" x1="445" y1="436" x2="445" y2="538" marker-end="url(#a-ink)"/>
+<text class="lbl" x="452" y="490">bind-mounts one worktree</text>
+
+<!-- ============ RIGHT HOST: the VPS ============ -->
+<rect class="host" x="670" y="24" width="610" height="680" rx="8"/>
+<text class="host-t" x="690" y="52">The VPS</text>
+<text class="host-s" x="775" y="52">instance-20260319-175710 · Debian 12 · production</text>
+
+<rect class="group solid" x="690" y="70" width="570" height="320" rx="6"/>
+<text class="group-t" x="706" y="92">DOCKER ENGINE · the socket claude-tmux-dev mounts</text>
+<g class="node here"><rect x="710" y="108" width="270" height="78" rx="4"/><text class="t" x="722" y="128">claude-tmux-dev  ← this session</text><text class="s" x="722" y="143">Claude Code, user dev, hostname agent</text><text class="s" x="722" y="157">mounts /home/patryk (rw)</text><text class="s" x="722" y="171">mounts /var/run/docker.sock</text></g>
+<g class="node faint"><rect x="1000" y="108" width="240" height="78" rx="4"/><text class="t" x="1012" y="128">other containers</text><text class="s" x="1012" y="143">claude-tmux-wireguard · ddns</text><text class="s" x="1012" y="157">booksmart-postgres · content-mine</text><text class="s" x="1012" y="171">caddy-waku · nwaku ×2</text></g>
+
+<rect class="group" x="856" y="196" width="388" height="100" rx="6"/>
+<text class="group-t" x="868" y="214">COMPOSE PROJECT · not deployed here yet</text>
+<g class="node open"><rect x="872" y="222" width="175" height="62" rx="4"/><text class="t" x="884" y="241">harness</text><text class="s" x="884" y="256">no host process</text><text class="s" x="884" y="270">127.0.0.1:3000 only</text></g>
+<g class="node open"><rect x="1057" y="222" width="175" height="62" rx="4"/><text class="t" x="1069" y="241">inngest</text><text class="s" x="1069" y="256">same compose file</text><text class="s" x="1069" y="270">127.0.0.1:8288 only</text></g>
+
+<rect x="976" y="319" width="240" height="50" rx="4" style="fill:var(--open-tint);stroke:var(--open);stroke-width:1.4;stroke-dasharray:5 4;opacity:.45"/>
+<g class="node open"><rect x="970" y="325" width="240" height="50" rx="4"/><text class="t" x="982" y="344">sandcastle-&lt;uuid&gt;</text><text class="s" x="982" y="359">one per Run, never claude-tmux-dev</text></g>
+
+<rect class="group solid" x="690" y="400" width="570" height="240" rx="6"/>
+<text class="group-t" x="706" y="422">FILESYSTEM · /home/patryk · the workspace root</text>
+<g class="node"><rect x="710" y="442" width="250" height="64" rx="4"/><text class="t" x="722" y="461">sandcastle-vps/</text><text class="s" x="722" y="476">sandcastle-todo-app/</text><text class="s" x="722" y="490">the checkouts you work in</text></g>
+<g class="node open"><rect x="990" y="442" width="250" height="64" rx="4"/><text class="t" x="1002" y="461">.sandcastle/worktrees/&lt;branch&gt;</text><text class="s" x="1002" y="476">created per Task Branch</text><text class="s" x="1002" y="490">what a sandbox bind-mounts</text></g>
+<g class="node open"><rect x="710" y="536" width="250" height="56" rx="4"/><text class="t" x="722" y="555">~/.sandcastle-vps/</text><text class="s" x="722" y="570">the install directory</text><text class="s" x="722" y="584">compose.yaml · .env · the package</text></g>
+<text class="lbl" x="990" y="556">one repo on disk, seen from two places:</text>
+<text class="lbl" x="990" y="570">your session (whole checkout) and each</text>
+<text class="lbl" x="990" y="584">sandbox (one worktree of it)</text>
+
+<!-- edges, VPS -->
+<line class="edge" x1="760" y1="186" x2="760" y2="440" marker-end="url(#a-ink)"/>
+<text class="lbl" x="768" y="330">bind mount, rw</text>
+<path class="edge open" d="M959,284 L959,300 L1090,300 L1090,323" marker-end="url(#a-open)"/>
+<text class="lbl open" x="1000" y="316">docker run</text>
+<line class="edge open" x1="1090" y1="375" x2="1090" y2="440" marker-end="url(#a-open)"/>
+<text class="lbl open" x="1097" y="412">bind mount, one worktree</text>
+
+<!-- deploy later -->
+<path class="edge open" d="M380,93 C 520,10 700,10 900,60" marker-end="url(#a-open)"/>
+<text class="lbl open" x="560" y="24" text-anchor="middle">same deploy, SSH_TARGET=the VPS — later</text>
+</svg>

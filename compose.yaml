@@ -1,17 +1,19 @@
-# The Orchestrator, and nothing else. The Harness runs as a systemd user
-# service on the host, where Docker and the Project checkouts natively live —
-# see ADR 0003.
+# The whole platform on a Target: the Orchestrator and the Harness, both
+# containers on the Target's own engine. There is no host process and no
+# host-process mode to fall back to — see ADR 0006.
+#
+# Pinned rather than derived from the install directory: the creator CLI looks
+# the stack up by project name, and the install directory is per-Target.
+name: sandcastle-vps
+
 services:
   inngest:
     # Pinned. `--host` governs only the API/dashboard bind: the connect gateway
     # (8289) and the two gRPC ports (50052, 50053) bind every interface
     # regardless, and no flag or env key changes that (verified on 1.44.0).
-    # Bridge networking is what keeps them off the host — only what `ports`
-    # publishes is reachable, and it is published on loopback alone.
+    # Bridge networking is what keeps them off the Target — only what `ports`
+    # publishes is reachable, and only the dashboard is published, on loopback.
     image: inngest/inngest:v1.44.0
-    # The default bridge, not a compose-created network, so the container's
-    # gateway is docker0 — the address the Harness listens on for it.
-    network_mode: bridge
     command:
       - inngest
       - start
@@ -22,19 +24,63 @@ services:
       - 0.0.0.0
       - --port
       - "8288"
-      # The Harness, at the docker bridge gateway — the second address it
-      # binds. The deploy detects the gateway and seeds it into .env.
+      # The Harness by service name, over the compose network. This is what
+      # retired the docker-bridge-gateway address the host process needed.
       - --sdk-url
-      - http://${DOCKER_BRIDGE_IP:?seeded by the deploy from the docker bridge}:${PORT:-3000}/api/inngest
+      - http://harness:${PORT:-3000}/api/inngest
     environment:
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
     ports:
-      # Dashboard and event API, host-loopback only. Reach it with:
-      #   ssh -L 8288:127.0.0.1:8288 <vps>
+      # Dashboard and event API, Target-loopback only. Reach it with:
+      #   ssh -L 8288:127.0.0.1:8288 <target>
       - "127.0.0.1:8288:8288"
     volumes:
       - inngest_data:/var/lib/inngest
+    restart: unless-stopped
+
+  harness:
+    build:
+      context: .
+      dockerfile: docker/harness/Dockerfile
+      args:
+        # Who owns the workspace checkouts on the Target. Read off the
+        # Target by whatever installs the stack, not guessed here.
+        OPERATOR_UID: ${OPERATOR_UID:?read off the Target by the deploy}
+        OPERATOR_GID: ${OPERATOR_GID:?read off the Target by the deploy}
+    # The Target's docker group, so the mounted socket is usable. This makes
+    # the Harness root-equivalent on the Target — explicit, and already true of
+    # the host process through the operator's own docker group (ADR 0006).
+    group_add:
+      - "${DOCKER_GID:?read off the Target by the deploy}"
+    environment:
+      # Orchestration settings only. Agent credentials are not here yet — they
+      # arrive with the Harness-held credential model.
+      WORKSPACE_ROOT: ${WORKSPACE_ROOT:?set to the directory holding the Project checkouts}
+      AGENT_MODEL: ${AGENT_MODEL:-claude-opus-4-8}
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
+      INNGEST_DEV: "0"
+      # All interfaces inside this container's namespace, for the same reason
+      # as Inngest above: the published port cannot reach a container-loopback
+      # bind, and the Orchestrator dials this container by name. What is
+      # reachable on the Target is decided by `ports`.
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
+    volumes:
+      # Sandboxes are siblings, spawned through the Target engine's socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Path parity: a Sandbox's bind mounts are created by the Target's
+      # daemon, so a worktree path inside the Harness has to be that same path
+      # on the Target.
+      - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
+    ports:
+      # The Dispatch surface is keyless — reachability is its access control —
+      # so it is published on Target loopback and nowhere else.
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    depends_on:
+      - inngest
     restart: unless-stopped
 
 volumes:

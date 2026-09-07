@@ -1,65 +1,48 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { env } from "./env.js";
+import { describe, expect, it } from "vitest";
+import { parseEnv } from "./env.js";
 
-describe("env", () => {
-  const saved = { ...process.env };
+/** The one setting with no sensible default. */
+const complete = { WORKSPACE_ROOT: "/home/op/work" };
 
-  beforeEach(() => {
-    delete process.env.HOST;
-    delete process.env.PORT;
-    delete process.env.DOCKER_BRIDGE_IP;
-  });
-
-  afterEach(() => {
-    process.env = { ...saved };
-  });
-
-  describe("host", () => {
-    // The harness runs as a plain process on the VPS host, so an all-interfaces
-    // bind would put the keyless dispatch surface on the public internet.
-    it("binds loopback by default", () => {
-      expect(env.host).toBe("127.0.0.1");
-    });
-
-    it("can be overridden deliberately", () => {
-      process.env.HOST = "0.0.0.0";
-      expect(env.host).toBe("0.0.0.0");
+describe("parseEnv", () => {
+  it("needs only the workspace root, and fills in the rest", () => {
+    expect(parseEnv(complete)).toEqual({
+      workspaceRoot: "/home/op/work",
+      defaultModel: "claude-opus-4-8",
+      host: "127.0.0.1",
+      port: 3000,
     });
   });
 
-  describe("hosts", () => {
-    it("is loopback only when no bridge address is configured", () => {
-      expect(env.hosts).toEqual(["127.0.0.1"]);
-    });
-
-    // The Orchestrator is a bridged container: it cannot reach host loopback,
-    // but it can reach the docker bridge gateway, which nothing off the host
-    // can route to.
-    it("adds the docker bridge gateway so the Orchestrator can reach the harness", () => {
-      process.env.DOCKER_BRIDGE_IP = "172.17.0.1";
-      expect(env.hosts).toEqual(["127.0.0.1", "172.17.0.1"]);
-    });
-
-    it("treats an empty bridge value as unset", () => {
-      process.env.DOCKER_BRIDGE_IP = "";
-      expect(env.hosts).toEqual(["127.0.0.1"]);
-    });
-
-    it("does not double-bind when the bridge address equals the host", () => {
-      process.env.HOST = "172.17.0.1";
-      process.env.DOCKER_BRIDGE_IP = "172.17.0.1";
-      expect(env.hosts).toEqual(["172.17.0.1"]);
-    });
+  // Compose sets 0.0.0.0 explicitly for the container, where exposure is
+  // decided by port publishing. Everywhere else — a server run directly in
+  // development — the keyless Dispatch surface stays on loopback.
+  it("takes the address compose gives the container", () => {
+    expect(parseEnv({ ...complete, HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
   });
 
-  describe("port", () => {
-    it("defaults to 3000", () => {
-      expect(env.port).toBe(3000);
-    });
+  it("reads the port as a number, not the string it arrives as", () => {
+    expect(parseEnv({ ...complete, PORT: "3399" }).port).toBe(3399);
+  });
 
-    it("reads PORT", () => {
-      process.env.PORT = "3399";
-      expect(env.port).toBe(3399);
-    });
+  // `Number(process.env.PORT)` used to turn each of these into 0 or NaN, and a
+  // bind to port 0 is a listener on a port nobody is dispatching to.
+  it.each(["", "0", "abc", "70000", "3000.5"])("refuses PORT=%o rather than binding something else", (port) => {
+    expect(() => parseEnv({ ...complete, PORT: port })).toThrow(/PORT/);
+  });
+
+  it("takes an agent model override, and defends the default from an empty one", () => {
+    expect(parseEnv({ ...complete, AGENT_MODEL: "claude-sonnet-5" }).defaultModel).toBe("claude-sonnet-5");
+    expect(() => parseEnv({ ...complete, AGENT_MODEL: "" })).toThrow(/AGENT_MODEL/);
+  });
+
+  it("names what is missing rather than failing later", () => {
+    expect(() => parseEnv({})).toThrow(/WORKSPACE_ROOT/);
+  });
+
+  // The path is mounted into the Harness at the same path it has on the
+  // Target; a relative one would resolve against whatever cwd happens to be.
+  it("insists the workspace root is absolute", () => {
+    expect(() => parseEnv({ WORKSPACE_ROOT: "work" })).toThrow(/absolute/);
   });
 });
