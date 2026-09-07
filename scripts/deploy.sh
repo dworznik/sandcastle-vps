@@ -182,7 +182,9 @@ harness_port="$(env_value PORT)"
 harness_port="${harness_port:-3000}"
 ready=""
 for _ in $(seq 1 60); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:${harness_port}/api/inngest"; then
+  # /health, not /api/inngest: the Inngest routes answer 401 to a request they
+  # cannot verify, and an unsigned curl never can.
+  if curl -fsS -o /dev/null "http://127.0.0.1:${harness_port}/health"; then
     ready=yes
     break
   fi

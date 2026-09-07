@@ -13,6 +13,17 @@ const post = (body: unknown, overrides?: Partial<AppDeps>) =>
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 
+describe("GET /health", () => {
+  // The installer waits on this to decide the Harness is up. The Inngest
+  // routes answer 401 to an unsigned request, so they cannot serve that.
+  it("answers a plain unsigned request", async () => {
+    const response = await app().request("/health");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+  });
+});
+
 describe("POST /dispatch", () => {
   it("queues the Run and answers with the Orchestrator's ids", async () => {
     const dispatch = dispatched();

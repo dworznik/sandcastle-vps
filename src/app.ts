@@ -45,6 +45,11 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
     return c.json({ error: "Dispatch failed" }, 500);
   });
 
+  // Something that answers 2xx to an unsigned request. The Inngest routes
+  // below cannot: they answer 401 to anything they cannot verify, which is
+  // correct of them and useless as a sign of life.
+  app.get("/health", (c) => c.json({ status: "ok" }));
+
   /**
    * Keyless Dispatch surface for callers on the Target (loopback) — the
    * harness holds the Inngest event key so dispatchers don't have to.
