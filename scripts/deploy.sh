@@ -149,6 +149,23 @@ corepack enable pnpm 2> /dev/null || npm install -g pnpm
 # this repo pins rather than whatever npx resolves to.
 pnpm install --frozen-lockfile --prod
 
+# --------------------------------------------------------- retire the old shape
+
+# A Target deployed before the Harness was containerised still has a user
+# service holding the Harness port, and the container about to publish it would
+# lose that race with an unhelpful "port is already allocated". Stop it here
+# rather than making the operator discover the collision. A no-op on a Target
+# that never had one.
+unit="$HOME/.config/systemd/user/sandcastle-harness.service"
+if [ -f "$unit" ]; then
+  echo "==> Retiring the host-process Harness service"
+  # systemctl --user over ssh has no session bus unless we point at one.
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  systemctl --user disable --now sandcastle-harness > /dev/null 2>&1 || true
+  rm -f "$unit"
+  systemctl --user daemon-reload > /dev/null 2>&1 || true
+fi
+
 # ----------------------------------------------------------------- the stack
 
 echo "==> Building and starting the stack"

@@ -57,9 +57,9 @@ dispatch_urls=()
 if [ -n "${SANDCASTLE_DISPATCH_URL:-}" ]; then
   dispatch_urls+=("$SANDCASTLE_DISPATCH_URL")
 fi
-# The Harness is a host process bound to loopback. From anywhere but this host
-# — a claude-tmux dev container, your laptop — come in over an SSH tunnel and
-# point SANDCASTLE_DISPATCH_URL at your end of it.
+# Compose publishes the Harness on this host's loopback and nowhere else. From
+# anywhere but this host — your laptop, a container on the box — come in over
+# an SSH tunnel and point SANDCASTLE_DISPATCH_URL at your end of it.
 dispatch_urls+=("http://127.0.0.1:${PORT:-3000}")
 
 # Two different failures must read differently: a harness that cannot be
