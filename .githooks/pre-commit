@@ -3,5 +3,7 @@
 # plain `pnpm install`.
 set -euo pipefail
 
-# Formats staged files and restages them.
+# Formats staged files and restages them, then runs the fast, non-type-aware
+# oxlint pass over them. The type-aware pass is CI's job: it is too slow to
+# belong in a hook people would then start bypassing.
 pnpm exec lint-staged

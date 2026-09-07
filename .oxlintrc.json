@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // oxlint rather than ESLint, deliberately: typescript-eslint hard-throws
+  // "typescript-eslint does not support TS 7.0" and refuses to load against
+  // this repo's TypeScript, and ESLint without that parser can only read the
+  // handful of .js/.mjs files here. oxlint brings its own parser and is
+  // indifferent to the TypeScript version. Do not swap ESLint back in.
+  //
+  // The cost, knowingly accepted: oxlint-tsgolint is version-locked to the
+  // TypeScript major, so a TS bump needs a matching bump here or the
+  // type-aware pass silently goes dark.
+  "categories": {
+    // pedantic and suspicious are left off: they surface ~25 findings that are
+    // almost entirely require-unicode-regexp and max-lines-per-function in
+    // test files.
+    "correctness": "error"
+  },
+  "ignorePatterns": ["node_modules"]
+}

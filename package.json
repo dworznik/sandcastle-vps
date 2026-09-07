@@ -34,6 +34,8 @@
     "cli": "tsx src/cli/main.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "lint": "oxlint",
+    "lint:type-aware": "oxlint --type-aware",
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks && git config blame.ignoreRevsFile .git-blame-ignore-revs || true"
   },
   "dependencies": {
@@ -48,6 +50,8 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "lint-staged": "^17.5.0",
+    "oxlint": "^1.81.0",
+    "oxlint-tsgolint": "^7.0.2001",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

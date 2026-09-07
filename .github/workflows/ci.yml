@@ -56,3 +56,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm format:check
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The full pass, including the type-aware rules the pre-commit hook
+      # skips for speed — no-floating-promises above all, in a Hono handler
+      # dispatching Inngest work.
+      - run: pnpm lint:type-aware
