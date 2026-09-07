@@ -3,3 +3,9 @@ node_modules/
 deploy.local
 *.log
 .DS_Store
+
+# Local editor and container setup, which differs per machine. Neither was
+# ignored before, so both sat in `git status` as untracked — close enough to
+# real changes for a `git add -A` to sweep one in, which has happened once.
+.vscode/
+.devcontainer
