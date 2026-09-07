@@ -13,7 +13,7 @@ Two containers on the Target, neither reachable from outside it:
 
 A Run only targets an **Onboarded** Project — a checkout with its own committed `.sandcastle/` directory. That Project's own `sandcastle:<dir-name>` image runs the Sandbox, and its own `.sandcastle/.env` supplies the agent token; the Harness holds neither. Dispatching to a checkout that was never Onboarded fails and tells you to Onboard it. When a Project's image is missing the Harness builds it once, and never rebuilds an existing one — so Dockerfile edits need a manual rebuild. See [ADR 0003](docs/adr/0003-strict-sandcastle-conventions-per-project-onboarding.md).
 
-Nothing listens on the public interface. The Dispatch surface is keyless — reachability *is* the access control. The two containers meet by service name on the compose network, and only two ports are published on the Target, both on loopback: the Dispatch surface and the dashboard. Every other listener stays inside its container. Remote access goes through an SSH tunnel, and the deploy refuses to finish if anything is listening where it shouldn't.
+Nothing listens on the public interface. The Dispatch surface is keyless — reachability _is_ the access control. The two containers meet by service name on the compose network, and only two ports are published on the Target, both on loopback: the Dispatch surface and the dashboard. Every other listener stays inside its container. Remote access goes through an SSH tunnel, and the deploy refuses to finish if anything is listening where it shouldn't.
 
 ![Where every container lives across the dev machine, the OrbStack stand-in and the VPS](docs/diagrams/host-topology.svg)
 

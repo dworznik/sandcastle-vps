@@ -23,7 +23,7 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - "8288"
+      - '8288'
       # The Harness by service name, over the compose network. This is what
       # retired the docker-bridge-gateway address the host process needed.
       - --sdk-url
@@ -34,7 +34,7 @@ services:
     ports:
       # Dashboard and event API, Target-loopback only. Reach it with:
       #   ssh -L 8288:127.0.0.1:8288 <target>
-      - "127.0.0.1:8288:8288"
+      - '127.0.0.1:8288:8288'
     volumes:
       - inngest_data:/var/lib/inngest
     restart: unless-stopped
@@ -52,7 +52,7 @@ services:
     # the Harness root-equivalent on the Target — explicit, and already true of
     # the host process through the operator's own docker group (ADR 0006).
     group_add:
-      - "${DOCKER_GID:?read off the Target by the deploy}"
+      - '${DOCKER_GID:?read off the Target by the deploy}'
     environment:
       # Orchestration settings only. Agent credentials are not here yet — they
       # arrive with the Harness-held credential model.
@@ -61,7 +61,7 @@ services:
       INNGEST_BASE_URL: http://inngest:8288
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
-      INNGEST_DEV: "0"
+      INNGEST_DEV: '0'
       # All interfaces inside this container's namespace, for the same reason
       # as Inngest above: the published port cannot reach a container-loopback
       # bind, and the Orchestrator dials this container by name. What is
@@ -78,7 +78,7 @@ services:
     ports:
       # The Dispatch surface is keyless — reachability is its access control —
       # so it is published on Target loopback and nowhere else.
-      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+      - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'
     depends_on:
       - inngest
     restart: unless-stopped

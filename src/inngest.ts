@@ -1,5 +1,5 @@
-import { Inngest, eventType } from "inngest";
-import { z } from "zod";
+import { Inngest, eventType } from 'inngest'
+import { z } from 'zod'
 
 export const runRequestedData = z.object({
   /** Directory name of a Project under the workspace root. */
@@ -11,10 +11,10 @@ export const runRequestedData = z.object({
   branch: z.string().min(1).optional(),
   /** Agent model override. */
   model: z.string().min(1).optional(),
-});
+})
 
-export const runRequested = eventType("sandcastle/run.requested", {
+export const runRequested = eventType('sandcastle/run.requested', {
   schema: runRequestedData,
-});
+})
 
-export const inngest = new Inngest({ id: "sandcastle-vps" });
+export const inngest = new Inngest({ id: 'sandcastle-vps' })

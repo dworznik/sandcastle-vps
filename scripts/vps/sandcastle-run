@@ -69,7 +69,7 @@ dispatch_urls+=("http://127.0.0.1:${PORT:-3000}")
 # so the status is read explicitly and the body is always shown.
 for url in "${dispatch_urls[@]}"; do
   response="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST "$url/dispatch" \
-    -H 'content-type: application/json' -d "$payload" 2>/dev/null)" || continue
+    -H 'content-type: application/json' -d "$payload" 2> /dev/null)" || continue
   status="${response##*$'\n'}"
   body="${response%$'\n'*}"
   case "$status" in

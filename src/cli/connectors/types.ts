@@ -1,4 +1,4 @@
-import type { Readable } from "node:stream";
+import type { Readable } from 'node:stream'
 
 /**
  * How the creator CLI reaches a Target. Everything the wizard does to a Target
@@ -12,19 +12,19 @@ import type { Readable } from "node:stream";
  * See docs/connectors.md for the contract each implementation owes its caller.
  */
 export interface Connector {
-  readonly kind: ConnectorKind;
+  readonly kind: ConnectorKind
   /**
    * Run a shell script on the Target and collect its output. Never throws for
    * a non-zero exit — the caller decides what a failure means.
    */
-  exec(script: string, opts?: ExecOptions): Promise<ExecResult>;
+  exec(script: string, opts?: ExecOptions): Promise<ExecResult>
   /** Extract a gzipped tar onto the Target, stripping its single root entry. */
-  putTar(stream: Readable, destDir: string): Promise<void>;
+  putTar(stream: Readable, destDir: string): Promise<void>
   /** Report whether this Target can host the stack. */
-  preflight(): Promise<Preflight>;
+  preflight(): Promise<Preflight>
 }
 
-export type ConnectorKind = "ssh" | "orb" | "docker-desktop" | "docker-context";
+export type ConnectorKind = 'ssh' | 'orb' | 'docker-desktop' | 'docker-context'
 
 /**
  * Everything the wizard needs to know about a kind of Target: what to call it,
@@ -33,62 +33,62 @@ export type ConnectorKind = "ssh" | "orb" | "docker-desktop" | "docker-context";
  * one to a single file plus a line in the registry.
  */
 export interface ConnectorDefinition {
-  readonly kind: ConnectorKind;
+  readonly kind: ConnectorKind
   /** Shown when the operator is asked how a Target is reached. */
-  readonly label: string;
+  readonly label: string
   /** What to ask for — an ssh destination, a machine name, nothing at all. */
-  readonly addressLabel: string;
+  readonly addressLabel: string
   /** The issue that builds this kind, while it is still only filed. */
-  readonly issue?: number;
-  readonly create: (target: TargetAddress) => Connector;
+  readonly issue?: number
+  readonly create: (target: TargetAddress) => Connector
 }
 
 /** The part of a Target profile a Connector needs to address it. */
 export interface TargetAddress {
-  readonly host: string;
-  readonly installDir: string;
-  readonly workspaceRoot: string;
+  readonly host: string
+  readonly installDir: string
+  readonly workspaceRoot: string
 }
 
 export interface ExecOptions {
   /** Written to the script's stdin, which is why a Connector must not use
    *  stdin for anything of its own — see docs/connectors.md. */
-  readonly stdin?: string | Readable;
+  readonly stdin?: string | Readable
   /** Run the script as root. Only ever used after preflight reports
    *  `canElevate` — elevation that would prompt for a password has nowhere to
    *  read one from. */
-  readonly sudo?: boolean;
+  readonly sudo?: boolean
 }
 
 export interface ExecResult {
-  readonly code: number;
-  readonly stdout: string;
-  readonly stderr: string;
+  readonly code: number
+  readonly stdout: string
+  readonly stderr: string
 }
 
 /** What preflight looks at. One id per thing that can be separately wrong. */
-export type CheckId = "docker" | "compose" | "docker-group" | "disk" | "arch";
+export type CheckId = 'docker' | 'compose' | 'docker-group' | 'disk' | 'arch'
 
 export interface PreflightCheck {
-  readonly id: CheckId;
-  readonly ok: boolean;
+  readonly id: CheckId
+  readonly ok: boolean
   /** What the Target reported, for the operator to read. */
-  readonly detail: string;
+  readonly detail: string
   /** The command that fixes it, without any `sudo` prefix: the same string is
    *  printed for the operator (prefixed) and handed to `exec` (with
    *  `sudo: true`), so it can only ever exist in one form. */
-  readonly remedy?: string;
-  readonly needsSudo?: boolean;
+  readonly remedy?: string
+  readonly needsSudo?: boolean
   /** Anything the command alone doesn't say. */
-  readonly note?: string;
+  readonly note?: string
 }
 
 export interface Preflight {
-  readonly ok: boolean;
-  readonly checks: readonly PreflightCheck[];
+  readonly ok: boolean
+  readonly checks: readonly PreflightCheck[]
   /** Whether this Connector can run a remedy itself — that is, whether
    *  elevation on the Target needs no password. */
-  readonly canElevate: boolean;
+  readonly canElevate: boolean
   /** The account on the Target that will own the stack. */
-  readonly user: string;
+  readonly user: string
 }

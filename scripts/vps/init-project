@@ -75,7 +75,7 @@ echo "==> Building the Project's image"
 # sandcastle's already-exists guard, so point at the step to retry rather than
 # leaving the operator to guess that .sandcastle/ must be deleted.
 if ! (cd "$dir" && sandcastle docker build-image); then
-  cat >&2 <<EOF
+  cat >&2 << EOF
 
 The image build failed, but ${project} is otherwise Onboarded — do not re-run
 init-project. Fix .sandcastle/Dockerfile and retry just the build:
@@ -87,7 +87,7 @@ EOF
   exit 1
 fi
 
-cat <<EOF
+cat << EOF
 
 Onboarded ${project}.
 
