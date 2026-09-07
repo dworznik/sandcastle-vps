@@ -12,6 +12,12 @@
 # unprivileged agent user. Go back up for the install, then return — `skills
 # add --global` must run as agent to land in that user's own home.
 USER root
+# openssh-client for `ssh-keygen -Y sign`, which is what git shells out to for
+# an ssh-format signature — the format a Run's commits are signed in, against
+# the key the Harness mounts (ADR 0006).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssh-client \
+  && rm -rf /var/lib/apt/lists/*
 ARG SKILLS_CLI_VERSION=1.5.17
 RUN npm install -g skills@${SKILLS_CLI_VERSION}
 

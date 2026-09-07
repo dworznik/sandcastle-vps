@@ -87,6 +87,14 @@ env_value() {
 ensure_env_key INNGEST_EVENT_KEY "$(openssl rand -hex 32)"
 ensure_env_key INNGEST_SIGNING_KEY "$(openssl rand -hex 32)"
 
+# Where the agent's signing key lives, mounted into the Harness at the same
+# path so a Sandbox's mount of it resolves on this host. This deploy has no way
+# to capture credentials — the creator CLI does that — so the directory is
+# created empty and Runs refuse to start until it holds a key.
+ensure_env_key SECRETS_DIR "${repo}/secrets"
+mkdir -p "${repo}/secrets"
+chmod 700 "${repo}/secrets"
+
 # Earlier versions kept the workspace root under the compose-era name; carry it
 # over so an existing deploy doesn't have to be re-answered by hand.
 legacy_root="$(env_value HOST_WORKSPACE_ROOT)"
