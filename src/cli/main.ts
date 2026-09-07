@@ -1,8 +1,8 @@
-import { createReadStream } from 'node:fs'
 import { HELP, parseArgs } from './args.js'
 import { CONNECTORS, connectorFor } from './connectors/index.js'
 import type { Connector, Preflight, PreflightCheck } from './connectors/types.js'
-import { packSelf, packageVersion } from './package.js'
+import { install } from './install.js'
+import { packageVersion } from './package.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
 import { createPrompter, type Prompter } from './prompt.js'
 import {
@@ -128,28 +128,16 @@ const checkTarget = async ({ profile, connector, prompter }: Session): Promise<P
 
 /**
  * The package is what gets installed, so delivery is the CLI shipping its own
- * contents (ADR 0006). Bringing the stack up on top of them is #34.
+ * contents (ADR 0006), and the install is delivery plus everything that has to
+ * be true afterwards.
  */
 const installUpgrade = async (session: Session): Promise<void> => {
-  const { profile, connector } = session
   const preflight = await checkTarget(session)
   if (!preflight.ok) {
     console.log('\nThe Target is not ready. Nothing was delivered.')
     return
   }
-
-  const version = await packageVersion()
-  console.log(
-    `\nDelivering @dworznik/sandcastle-vps ${version} to ${describeTarget(profile)} → ${profile.installDir}…`,
-  )
-  const { tarball, cleanup } = await packSelf()
-  try {
-    await connector.putTar(createReadStream(tarball), profile.installDir)
-  } finally {
-    await cleanup()
-  }
-  console.log('Delivered.')
-  console.log(`\n${notBuiltYet('Building the Harness image and starting the stack', 34)}`)
+  await install(session)
 }
 
 const menu = async (session: Session): Promise<void> => {
