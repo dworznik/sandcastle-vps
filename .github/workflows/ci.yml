@@ -23,18 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Before setup-node: its pnpm cache lookup shells out to pnpm to find
-      # the store path. Version comes from packageManager in package.json.
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          # The minimum this package declares it supports, and the base the
-          # sandbox images are built from.
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - run: pnpm typecheck
 
@@ -46,14 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - run: pnpm format:check
 
@@ -63,19 +45,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       # The full pass, including the type-aware rules the pre-commit hook
       # skips for speed — no-floating-promises above all, in a Hono handler
       # dispatching Inngest work.
       - run: pnpm lint:type-aware
+
+  commits:
+    name: commit conventions
+    # There is no PR title to lint on a push.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+
+      # The title, not the commits: this repo squash-merges, so the title is
+      # what becomes the commit on main and a commit-msg hook never sees it.
+      # The " (#N)" suffix GitHub appends is part of that commit, so it is
+      # linted too — a title that fits in 100 characters can still produce a
+      # header that does not, which has already happened once on main.
+      - name: Lint the pull request title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s (#%s)\n' "$TITLE" "$NUMBER" | pnpm exec commitlint
 
   secrets:
     name: secret scan
@@ -116,34 +112,6 @@ jobs:
           fi
           ./gitleaks git --no-banner --redact --log-opts="--no-merges $range" .
 
-  commits:
-    name: commit conventions
-    # There is no PR title to lint on a push.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # The title, not the commits: this repo squash-merges, so the title is
-      # what becomes the commit on main and a commit-msg hook never sees it.
-      # The " (#N)" suffix GitHub appends is part of that commit, so it is
-      # linted too — a title that fits in 100 characters can still produce a
-      # header that does not, which has already happened once on main.
-      - name: Lint the pull request title
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-          NUMBER: ${{ github.event.pull_request.number }}
-        run: printf '%s (#%s)\n' "$TITLE" "$NUMBER" | pnpm exec commitlint
-
   shell:
     name: shell
     # Deliberately no Node: this job installs nothing from npm, so it should
@@ -162,28 +130,22 @@ jobs:
           SHFMT_VERSION: 3.12.0
           SHFMT_SHA256: d9fbb2a9c33d13f47e7618cf362a914d029d02a6df124064fff04fd688a745ea
         run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+
           curl -sSfL -o shellcheck.tar.xz \
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
-          tar -xJf shellcheck.tar.xz --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          tar -xJf shellcheck.tar.xz -C "$RUNNER_TEMP/bin" --strip-components=1 \
+            "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           rm shellcheck.tar.xz
 
-          curl -sSfL -o shfmt \
+          curl -sSfL -o "$RUNNER_TEMP/bin/shfmt" \
             "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64"
-          echo "${SHFMT_SHA256}  shfmt" | sha256sum -c -
-          chmod +x shfmt
+          echo "${SHFMT_SHA256}  $RUNNER_TEMP/bin/shfmt" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/shfmt"
 
-      # Discovery is shebang-based, not glob-based: three of the six scripts
-      # here (init-project, sandcastle-run, sync-env) have no .sh extension.
-      - name: Find the shell scripts
-        run: |
-          ./shfmt -f . | tee shell-scripts.txt
-          test -s shell-scripts.txt
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
-      # -x -P SCRIPTDIR so the `source "${here}/lib/…"` lines in the vps
-      # commands resolve to the libraries they actually load.
-      - name: shellcheck
-        run: xargs -a shell-scripts.txt ./shellcheck -x -P SCRIPTDIR
-
-      - name: shfmt
-        run: xargs -a shell-scripts.txt ./shfmt -i 2 -ci -sr -d
+      # The same script a contributor runs locally, so the one check that needs
+      # tools npm cannot install is still reproducible off the runner.
+      - run: ./scripts/lint-shell.sh

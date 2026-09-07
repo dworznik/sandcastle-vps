@@ -1,0 +1,19 @@
+name: Setup
+description: pnpm, Node, and this package's dependencies.
+
+runs:
+  using: composite
+  steps:
+    # Before setup-node: its pnpm cache lookup shells out to pnpm to find the
+    # store path. Version comes from packageManager in package.json.
+    - uses: pnpm/action-setup@v6
+
+    - uses: actions/setup-node@v7
+      with:
+        # The minimum this package declares it supports, and the base the
+        # sandbox images are built from.
+        node-version: 22
+        cache: pnpm
+
+    - run: pnpm install --frozen-lockfile
+      shell: bash

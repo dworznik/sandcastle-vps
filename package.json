@@ -36,7 +36,8 @@
     "format:check": "prettier --check .",
     "lint": "oxlint",
     "lint:type-aware": "oxlint --type-aware",
-    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks && git config blame.ignoreRevsFile .git-blame-ignore-revs || true"
+    "lint:shell": "./scripts/lint-shell.sh",
+    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 || exit 0; git config core.hooksPath .githooks && git config blame.ignoreRevsFile .git-blame-ignore-revs"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.12.0",
