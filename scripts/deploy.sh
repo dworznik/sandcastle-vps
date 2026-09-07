@@ -37,7 +37,7 @@ rsync -az --delete \
   "$repo_root/" "$SSH_TARGET:.sandcastle-vps/"
 
 echo "==> Configuring the VPS"
-ssh "$SSH_TARGET" bash -s <<'REMOTE'
+ssh "$SSH_TARGET" bash -s << 'REMOTE'
 set -euo pipefail
 repo="$HOME/.sandcastle-vps"
 cd "$repo"

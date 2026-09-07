@@ -1,7 +1,7 @@
 export interface Args {
   /** Skip the Target picker and use this one. */
-  readonly target?: string;
-  readonly help: boolean;
+  readonly target?: string
+  readonly help: boolean
 }
 
 export const HELP = `sandcastle-vps — install and run the sandcastle platform on a Target
@@ -14,23 +14,23 @@ Options:
   -h, --help        Show this.
 
 Everything else is a menu. Target profiles live in
-~/.config/sandcastle-vps/targets/ and never hold a secret.`;
+~/.config/sandcastle-vps/targets/ and never hold a secret.`
 
 export const parseArgs = (argv: readonly string[]): Args => {
-  let target: string | undefined;
-  let help = false;
+  let target: string | undefined
+  let help = false
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "-h" || arg === "--help") {
-      help = true;
-    } else if (arg === "--target") {
-      target = argv[++i];
-      if (target === undefined) throw new Error("--target needs a Target name.");
-    } else if (arg?.startsWith("--target=")) {
-      target = arg.slice("--target=".length);
+    const arg = argv[i]
+    if (arg === '-h' || arg === '--help') {
+      help = true
+    } else if (arg === '--target') {
+      target = argv[++i]
+      if (target === undefined) throw new Error('--target needs a Target name.')
+    } else if (arg?.startsWith('--target=')) {
+      target = arg.slice('--target='.length)
     } else {
-      throw new Error(`Unknown argument: ${arg}\n\n${HELP}`);
+      throw new Error(`Unknown argument: ${arg}\n\n${HELP}`)
     }
   }
-  return { target, help };
-};
+  return { target, help }
+}

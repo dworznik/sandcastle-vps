@@ -18,7 +18,7 @@ question and the factory from the registry, and never names a kind itself. The
 placeholder entries are what make an unbuilt kind fail with its issue number
 instead of a type error.
 
-A definition carries what the wizard needs to *ask* about a Target — the label
+A definition carries what the wizard needs to _ask_ about a Target — the label
 in the "How is it reached?" list, and what its address is called (an ssh
 destination, a machine name, nothing at all for a Target that is this machine).
 There is no display field on `Connector` itself: a Target is described from its
@@ -28,10 +28,10 @@ profile, because "op@vps" is not a universal shape.
 
 ```ts
 interface Connector {
-  readonly kind: "ssh" | "orb" | "docker-desktop" | "docker-context";
-  exec(script: string, opts?: { stdin?: string | Readable; sudo?: boolean }): Promise<ExecResult>;
-  putTar(stream: Readable, destDir: string): Promise<void>;
-  preflight(): Promise<Preflight>;
+  readonly kind: 'ssh' | 'orb' | 'docker-desktop' | 'docker-context'
+  exec(script: string, opts?: { stdin?: string | Readable; sudo?: boolean }): Promise<ExecResult>
+  putTar(stream: Readable, destDir: string): Promise<void>
+  preflight(): Promise<Preflight>
 }
 ```
 
@@ -67,7 +67,7 @@ command would really work. A check that can fail for several reasons has to
 tell them apart first: a Docker socket that will not open is a group membership
 on one Target and a stopped daemon on another, and a `usermod` printed for the
 second is a command that cannot help. A remedy is stored
-*without* `sudo`: the same string is printed for the operator (prefixed) and
+_without_ `sudo`: the same string is printed for the operator (prefixed) and
 handed to `exec({ sudo: true })`, so the two can never disagree. Probe in one
 round trip — a check per round trip is a handshake per check on ssh Targets.
 `src/cli/preflight.ts` holds the probe script and the pure evaluation, so a new
@@ -75,7 +75,7 @@ Connector reuses both and only supplies `exec`.
 
 ## Package delivery
 
-The package *is* the Harness (ADR 0006): the CLI ships its own contents, so a
+The package _is_ the Harness (ADR 0006): the CLI ships its own contents, so a
 Target needs neither git nor npm credentials and always runs the version the
 operator invoked. `packSelf` (`src/cli/package.ts`) runs `npm pack`, which
 applies exactly the rules `npm publish` would — the `files` list in

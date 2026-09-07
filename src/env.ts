@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from 'zod'
 
 /**
  * The harness's own runtime settings — orchestration only. Agent credentials
@@ -18,24 +18,24 @@ const schema = z.object({
   WORKSPACE_ROOT: z
     .string()
     .min(1)
-    .startsWith("/", "must be an absolute path — it is also a path on the Target"),
+    .startsWith('/', 'must be an absolute path — it is also a path on the Target'),
   /** Model for the sandbox agent unless a Dispatch overrides it. */
-  AGENT_MODEL: z.string().min(1).default("claude-opus-4-8"),
+  AGENT_MODEL: z.string().min(1).default('claude-opus-4-8'),
   /** Address the harness binds, inside its own container namespace. The
    *  Harness is a container (ADR 0006): what is reachable on the Target is
    *  decided by the compose `ports` mapping, which publishes this port on
    *  Target loopback only. Compose sets this to 0.0.0.0 so the published port
    *  and the Orchestrator can both reach it; the default stays loopback so
    *  running the server directly in development never widens itself. */
-  HOST: z.string().min(1).default("127.0.0.1"),
+  HOST: z.string().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-});
+})
 
 export interface Env {
-  readonly workspaceRoot: string;
-  readonly defaultModel: string;
-  readonly host: string;
-  readonly port: number;
+  readonly workspaceRoot: string
+  readonly defaultModel: string
+  readonly host: string
+  readonly port: number
 }
 
 /**
@@ -43,17 +43,17 @@ export interface Env {
  * it. Pure, so the failures are testable without a process to kill.
  */
 export const parseEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
-  const parsed = schema.safeParse(source);
+  const parsed = schema.safeParse(source)
   if (!parsed.success) {
-    throw new Error(`Incomplete environment:\n${z.prettifyError(parsed.error)}`);
+    throw new Error(`Incomplete environment:\n${z.prettifyError(parsed.error)}`)
   }
   return {
     workspaceRoot: parsed.data.WORKSPACE_ROOT,
     defaultModel: parsed.data.AGENT_MODEL,
     host: parsed.data.HOST,
     port: parsed.data.PORT,
-  };
-};
+  }
+}
 
 /**
  * Settings for this process, read once at startup.
@@ -66,9 +66,9 @@ export const parseEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
  */
 export const env: Env = (() => {
   try {
-    return parseEnv();
+    return parseEnv()
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
   }
-})();
+})()

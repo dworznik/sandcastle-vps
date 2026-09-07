@@ -4,4 +4,4 @@
  * escaped, and reopened — the one form that also survives zsh and fish, which
  * an operator's login shell on a Target may well be.
  */
-export const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+export const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`

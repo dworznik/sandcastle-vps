@@ -1,0 +1,5 @@
+# Revisions git blame should skip. Activated locally by the prepare script,
+# which points blame.ignoreRevsFile here; GitHub reads this file by name.
+
+# chore(format): reformat the repo with prettier and shfmt
+d1ca9c11f794ad22c9b2221e1f76859fe2b298e2

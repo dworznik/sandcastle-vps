@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Activated by core.hooksPath, which the package's prepare script sets on a
+# plain `pnpm install`.
+set -euo pipefail
+
+# The local half of the rule only. The half that decides what lands on main is
+# the PR-title job in CI, because this repo squash-merges.
+pnpm exec commitlint --edit "$1"

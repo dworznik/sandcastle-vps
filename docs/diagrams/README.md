@@ -4,10 +4,10 @@ Plain, commented SVG. They are the source of truth — edit them here rather tha
 re-exporting from somewhere else, and keep them next to the decision they
 illustrate.
 
-| File | Shows |
-| --- | --- |
+| File                                     | Shows                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`host-topology.svg`](host-topology.svg) | Where every container lives across the dev machine, the OrbStack stand-in and the VPS: the compose project holding both halves of the platform, the socket and path-parity mounts the Harness holds, and the ephemeral Sandbox a Run spawns as its sibling. |
-| [`run-lifetimes.svg`](run-lifetimes.svg) | What is long-lived and what lasts one Run — the two compose services against the Sandbox containers that come and go with each Dispatch. |
+| [`run-lifetimes.svg`](run-lifetimes.svg) | What is long-lived and what lasts one Run — the two compose services against the Sandbox containers that come and go with each Dispatch.                                                                                                                    |
 
 Both carry their own palette and adapt to a dark viewer. They load no webfont:
 a committed SVG is usually viewed as an image, which fetches nothing external,
