@@ -115,3 +115,31 @@ jobs:
             range="$BASE..$HEAD"
           fi
           ./gitleaks git --no-banner --redact --log-opts="--no-merges $range" .
+
+  commits:
+    name: commit conventions
+    # There is no PR title to lint on a push.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The title, not the commits: this repo squash-merges, so the title is
+      # what becomes the commit on main and a commit-msg hook never sees it.
+      # The " (#N)" suffix GitHub appends is part of that commit, so it is
+      # linted too — a title that fits in 100 characters can still produce a
+      # header that does not, which has already happened once on main.
+      - name: Lint the pull request title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s (#%s)\n' "$TITLE" "$NUMBER" | pnpm exec commitlint
