@@ -10,9 +10,10 @@
   // TypeScript major, so a TS bump needs a matching bump here or the
   // type-aware pass silently goes dark.
   "categories": {
-    // pedantic and suspicious are left off: they surface ~25 findings that are
-    // almost entirely require-unicode-regexp and max-lines-per-function in
-    // test files.
+    // pedantic and suspicious are left off: together they surface 58 findings,
+    // two thirds of them require-unicode-regexp and max-lines-per-function and
+    // two thirds of them in test files. Style preferences, not bugs. CLAUDE.md
+    // carries the breakdown.
     "correctness": "error"
   },
   "ignorePatterns": ["node_modules"]
