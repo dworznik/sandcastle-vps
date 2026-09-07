@@ -3,6 +3,24 @@
 # plain `pnpm install`.
 set -euo pipefail
 
+# gitleaks is a binary, not an npm dependency, so a fresh clone can be without
+# it. Fail loudly rather than skipping: a secret-scanning hook that quietly
+# does nothing is worse than no hook, because it is trusted.
+if ! command -v gitleaks > /dev/null 2>&1; then
+  cat >&2 << 'EOF'
+pre-commit: gitleaks is not installed, and this hook will not run without it.
+
+  macOS:  brew install gitleaks
+  Linux:  https://github.com/gitleaks/gitleaks/releases
+
+EOF
+  exit 1
+fi
+
+# --redact so a real credential is not echoed into a scrollback buffer on its
+# way to being caught.
+gitleaks git --staged --redact --no-banner .
+
 # Formats staged files and restages them, then runs the fast, non-type-aware
 # oxlint pass over them. The type-aware pass is CI's job: it is too slow to
 # belong in a hook people would then start bypassing.
