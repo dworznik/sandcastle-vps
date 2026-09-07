@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 300" width="1240" height="300" role="img">
+  <title>What is long-lived, and what lasts one Run</title>
+  <desc>Lifetimes over time. claude-tmux-dev, the Harness and inngest are long-lived bars across the whole axis; the Harness and inngest are both compose services restarted by compose. Three Runs appear as short teal bars, each a separate container created at dispatch and removed at the end; the next Run starts a new one.</desc>
+  <style>
+    /* Standalone copy of the page's tokens. A committed SVG is usually viewed
+       as an image, which loads no external stylesheet and no webfont — hence
+       the fallback stacks and the explicit background below. */
+    :root{
+      --bg:#F3F5F7; --surface:#FFFFFF; --ink:#1B2430; --muted:#5F6B77; --line:#C9D1D9; --lane:#E9EDF1;
+      --decided:#1F7A6D; --decided-tint:#DFF1EC; --open:#B9601F; --open-tint:#FBEBDD; --here:#2F5FBF; --here-tint:#E3EBFA;
+      --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+      --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    }
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg:#141A21; --surface:#1C242D; --ink:#E6EAEE; --muted:#98A3AE; --line:#34404C; --lane:#1A222B;
+        --decided:#4FB8A6; --decided-tint:#173B36; --open:#E8975A; --open-tint:#3F2A18; --here:#7FA3F0; --here-tint:#1E2C48;
+      }
+    }
+    svg{font-family:var(--mono);color:var(--ink)}
+    .bgfill{fill:var(--bg)}
+    .host{fill:var(--lane);stroke:var(--line);stroke-width:1}
+    .host-t{font-family:var(--sans);font-size:14px;font-weight:600;fill:currentColor}
+    .host-s{font-size:11px;fill:var(--muted)}
+    .group{fill:var(--surface);stroke:var(--line);stroke-width:1;stroke-dasharray:3 3}
+    .group.solid{stroke-dasharray:none}
+    .group-t{font-size:11.5px;letter-spacing:.06em;fill:var(--muted);font-weight:500}
+    .node rect{fill:var(--surface);stroke:currentColor;stroke-width:1.4}
+    .node.open rect{stroke:var(--open);fill:var(--open-tint);stroke-dasharray:5 4}
+    .node.here rect{stroke:var(--here);fill:var(--here-tint);stroke-width:2.5}
+    .node.faint rect{stroke:var(--line);fill:var(--lane)}
+    .node .t{font-family:var(--sans);font-size:12.5px;font-weight:600;fill:currentColor}
+    .node .s{font-size:10.5px;fill:var(--muted)}
+    .node.open .s{fill:var(--open)} .node.here .s{fill:var(--here)} .node.faint .t{fill:var(--muted);font-weight:500}
+    .edge{fill:none;stroke:currentColor;stroke-width:1.4}
+    .edge.open{stroke:var(--open);stroke-dasharray:5 4} .edge.dec{stroke:var(--decided)} .edge.thin{stroke:var(--line)}
+    .lbl{font-size:10.5px;fill:var(--muted)} .lbl.open{fill:var(--open)} .lbl.dec{fill:var(--decided)} .lbl.here{fill:var(--here)}
+    .bar{fill:var(--surface);stroke:currentColor;stroke-width:1.4}
+    .bar.here{stroke:var(--here);fill:var(--here-tint);stroke-width:2}
+    .bar.run{fill:var(--decided-tint);stroke:var(--decided)}
+    .axis{stroke:var(--line)}
+  </style>
+  <rect class="bgfill" width="100%" height="100%"/>
+
+<defs><marker id="l-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<line class="axis" x1="220" y1="270" x2="1220" y2="270" marker-end="url(#l-ink)" style="stroke:currentColor"/>
+<text class="lbl" x="1220" y="290" text-anchor="end">time →</text>
+
+<text class="lbl here" x="20" y="54" style="font-weight:500">claude-tmux-dev</text><text class="lbl" x="20" y="68">your session · VPS</text>
+<rect class="bar here" x="220" y="40" width="1000" height="22" rx="3"/>
+<text class="lbl here" x="232" y="55">as long as you keep it — runs nothing for the Loop</text>
+
+<text class="lbl" x="20" y="104" style="fill:currentColor;font-weight:500">harness</text><text class="lbl" x="20" y="118">compose service</text>
+<rect class="bar" x="220" y="90" width="1000" height="22" rx="3"/>
+<text class="lbl" x="232" y="105">always · restart: unless-stopped</text>
+
+<text class="lbl" x="20" y="154" style="fill:currentColor;font-weight:500">inngest</text><text class="lbl" x="20" y="168">compose service</text>
+<rect class="bar" x="220" y="140" width="1000" height="22" rx="3"/>
+<text class="lbl" x="232" y="155">always · restart: unless-stopped</text>
+
+<text class="lbl dec" x="20" y="204" style="font-weight:500">sandbox containers</text><text class="lbl" x="20" y="218">one per Run</text>
+<rect class="bar run" x="300" y="190" width="220" height="22" rx="3"/><text class="lbl dec" x="310" y="205">sandcastle-3f9c…  Run A</text>
+<rect class="bar run" x="620" y="190" width="260" height="22" rx="3"/><text class="lbl dec" x="630" y="205">sandcastle-a71e…  Run B</text>
+<rect class="bar run" x="960" y="190" width="180" height="22" rx="3"/><text class="lbl dec" x="970" y="205">sandcastle-08d2…  Run C</text>
+<text class="lbl" x="300" y="240">docker run</text><text class="lbl" x="520" y="240" text-anchor="end">stop + rm</text>
+<text class="lbl" x="620" y="240">docker run</text><text class="lbl" x="880" y="240" text-anchor="end">stop + rm</text>
+<text class="lbl" x="960" y="240">docker run</text><text class="lbl" x="1140" y="240" text-anchor="end">stop + rm</text>
+</svg>

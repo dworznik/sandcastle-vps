@@ -15,6 +15,10 @@ A Run only targets an **Onboarded** Project — a checkout with its own committe
 
 Nothing listens on the public interface. The Dispatch surface is keyless — reachability *is* the access control. The two containers meet by service name on the compose network, and only two ports are published on the Target, both on loopback: the Dispatch surface and the dashboard. Every other listener stays inside its container. Remote access goes through an SSH tunnel, and the deploy refuses to finish if anything is listening where it shouldn't.
 
+![Where every container lives across the dev machine, the OrbStack stand-in and the VPS](docs/diagrams/host-topology.svg)
+
+More in [`docs/diagrams/`](docs/diagrams/), including what lasts one Run and what doesn't.
+
 ## Lifecycle
 
 ### 1. Deploy
