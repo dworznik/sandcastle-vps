@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Activated by core.hooksPath, which the package's prepare script sets on a
+# plain `pnpm install`.
+set -euo pipefail
+
+# Formats staged files and restages them.
+pnpm exec lint-staged

@@ -31,7 +31,10 @@
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "cli": "tsx src/cli/main.ts"
+    "cli": "tsx src/cli/main.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks && git config blame.ignoreRevsFile .git-blame-ignore-revs || true"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.12.0",
@@ -44,6 +47,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "lint-staged": "^17.5.0",
+    "prettier": "^3.9.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
