@@ -200,7 +200,7 @@ describe('writeEnvScript', () => {
 })
 
 describe('nextSteps', () => {
-  const passed = [{ ok: true, label: 'harness synced', detail: '' }]
+  const passed = [{ ok: true, label: 'Harness synced', detail: '' }]
 
   it('sends the operator to credential capture, because no Run works without it', () => {
     expect(nextSteps(profile, 3000, passed)).toContain('credentials')

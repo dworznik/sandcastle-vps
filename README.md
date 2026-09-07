@@ -39,7 +39,7 @@ Re-running upgrades in place. It is idempotent: an existing `.env` value is seed
 
 **Prerequisites.** Your machine needs Node and `ssh`. The Target needs Docker Engine with the compose plugin, and your user in its `docker` group — the preflight names anything that is missing, and needs nothing else installed: it does not require rsync, curl, or iproute2 on either end.
 
-The Harness has no credentials after an install. Capturing them is the wizard's _Rotate credentials_, which is not built yet (issue #35); until it is, a Run refuses to start and names what it is short of.
+The Harness has no credentials after an install. Capturing them is not built yet (issue #35); until it is, a Run refuses to start and names what it is short of.
 
 <details>
 <summary>The interim deploy from a checkout</summary>

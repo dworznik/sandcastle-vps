@@ -73,7 +73,7 @@ describe('agentSandbox', () => {
     })
 
     it('says how to fix it rather than only what is wrong', () => {
-      expect(() => agentSandbox({}, keyExists)).toThrow(/Rotate credentials/)
+      expect(() => agentSandbox({}, keyExists)).toThrow(/npx @dworznik\/sandcastle-vps/)
     })
   })
 

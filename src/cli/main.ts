@@ -153,7 +153,14 @@ const menu = async (session: Session): Promise<void> => {
     if (action === 'quit') return
     if (action === 'install') await installUpgrade(session)
     if (action === 'project') console.log(`\n${notBuiltYet('Adding a Project', 36)}`)
-    if (action === 'rotate') console.log(`\n${notBuiltYet('Rotating credentials', 37)}`)
+    if (action === 'rotate') {
+      // Two issues, one entry: #35 captures credentials for the first time,
+      // #37 rotates them. Naming only one of them is how the install's own
+      // "do this next" ended up pointing at a different number.
+      console.log(
+        `\n${notBuiltYet('Capturing credentials', 35)}\n${notBuiltYet('Rotating them', 37)}`,
+      )
+    }
     if (action === 'status') console.log(`\n${notBuiltYet('Status', 37)}`)
   }
 }

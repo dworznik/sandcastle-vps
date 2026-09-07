@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import type { Connector } from './connectors/types.js'
 import { packSelf, packageVersion } from './package.js'
 import { describeTarget, type TargetProfile } from './profiles.js'
+import { parseProbe } from './preflight.js'
 import { shellQuote } from './shell.js'
 import { readEnv, upsertAllEnv } from './target-env.js'
 import { formatChecks, verifyInstall, type Check, type VerifyOptions } from './verify.js'
@@ -19,7 +20,8 @@ import { formatChecks, verifyInstall, type Check, type VerifyOptions } from './v
 
 /** Where the signing key lives, under the install directory. Compose mounts
  *  this directory into the Harness at path parity and derives the key's own
- *  path from it, so this is the only place the layout is decided. */
+ *  file name from it, so this decides the directory and compose decides the
+ *  name — between them, nothing else needs to know the layout. */
 export const secretsDir = (installDir: string): string => `${installDir}/secrets`
 
 export interface TargetFacts {
@@ -60,11 +62,10 @@ printf 'event-key\\t%s\\n' "$(rand)"
 printf 'signing-key\\t%s\\n' "$(rand)"`
 
 export const parseFacts = (stdout: string): TargetFacts => {
-  const facts: Record<string, string> = {}
-  for (const line of stdout.split('\n')) {
-    const tab = line.indexOf('\t')
-    if (tab > 0) facts[line.slice(0, tab)] = line.slice(tab + 1).trim()
-  }
+  // The same `key<TAB>value` wire preflight uses, and the same reader: two
+  // scripts asking the Target about itself should not disagree about how it
+  // answers. `preflight.ts` is where that protocol lives (docs/connectors.md).
+  const facts = parseProbe(stdout)
   const required = ['uid', 'gid', 'event-key', 'signing-key'] as const
   const missing = required.filter((key) => !facts[key])
   if (missing.length > 0) {
@@ -79,11 +80,11 @@ export const parseFacts = (stdout: string): TargetFacts => {
     )
   }
   return {
-    operatorUid: facts.uid ?? '',
-    operatorGid: facts.gid ?? '',
-    dockerGid: facts['docker-gid'],
-    inngestEventKey: facts['event-key'] ?? '',
-    inngestSigningKey: facts['signing-key'] ?? '',
+    operatorUid: facts.uid?.trim() ?? '',
+    operatorGid: facts.gid?.trim() ?? '',
+    dockerGid: facts['docker-gid'].trim(),
+    inngestEventKey: facts['event-key']?.trim() ?? '',
+    inngestSigningKey: facts['signing-key']?.trim() ?? '',
   }
 }
 
@@ -282,9 +283,9 @@ export const nextSteps = (
   }
   return [
     '',
-    'Next: give the Harness its credentials — until it has them, every Run refuses to',
-    'start and names what is missing. Capturing them is this menu\'s "Rotate',
-    'credentials", which is not built yet — see issue #35.',
+    'Next: give the Harness its credentials — until it has them, every Run refuses',
+    'to start and names what is missing. Capturing them is not built yet — see',
+    'issue #35.',
     '',
     `Dashboard: ssh -L 8288:127.0.0.1:8288 ${profile.host}, then open http://127.0.0.1:8288`,
     `Dispatch:  the Harness answers on the Target's 127.0.0.1:${port}`,

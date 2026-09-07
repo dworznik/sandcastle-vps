@@ -14,7 +14,16 @@ type Mount = NonNullable<DockerOptions['mounts']>[number]
  * carries no credentials of its own.
  */
 
-/** Where the signing key is mounted, read-only, inside the Sandbox. */
+/**
+ * Where the signing key is mounted, read-only, inside the Sandbox.
+ *
+ * A bind mount carries the file's mode and owner through unchanged, and
+ * `ssh-keygen -Y sign` refuses a private key that is group- or world-readable.
+ * So whatever generates the key on the Target owes it mode 600 owned by the
+ * operator — the same uid the Sandbox runs as, since sandcastle takes the
+ * container's user from this process. That is the wizard's job (#35); this only
+ * names the file.
+ */
 export const SANDBOX_SIGNING_KEY_PATH = '/home/agent/.sandcastle-agent/signing_key'
 
 /**
@@ -43,18 +52,13 @@ export interface AgentSandbox {
   readonly hooks: SandboxHooks
 }
 
-/** Order is the order they are reported in, so keep it useful to read. */
-const REQUIRED: readonly (keyof AgentCredentials)[] = [
-  'agentToken',
-  'githubToken',
-  'gitName',
-  'gitEmail',
-  'signingKeyPath',
-]
+/** Every credential, in the order they are reported in — which is the order
+ *  `CREDENTIAL_KEYS` declares them, so adding one there is the whole change. */
+const REQUIRED = Object.keys(CREDENTIAL_KEYS) as (keyof AgentCredentials)[]
 
 const MISSING_HINT =
-  'Capture them with the wizard (`npx @dworznik/sandcastle-vps` → Rotate credentials), ' +
-  "which writes them into the Target's environment file and restarts the Harness."
+  'Capture them with the wizard (`npx @dworznik/sandcastle-vps`), which writes them into ' +
+  "the Target's environment file and restarts the Harness."
 
 /**
  * Build a Run's sandbox wiring, or refuse and name what is missing.

@@ -50,7 +50,7 @@ describe('syncCheck', () => {
   it('reports a non-JSON answer as what it is', () => {
     expect(syncCheck('service "harness" is not running\nmore noise')).toEqual({
       ok: false,
-      label: 'harness synced',
+      label: 'Harness synced',
       detail: 'service "harness" is not running',
     })
   })
@@ -136,16 +136,31 @@ describe('dispatchCheck', () => {
 })
 
 describe('the probe scripts', () => {
-  it('reaches the Orchestrator by service name, from inside the Harness', () => {
+  // Inside the Harness container, `127.0.0.1` is that container's loopback,
+  // not the Target's — so a `ports:` mapping that never took effect would
+  // still pass. `--network host` is what makes these outside checks.
+  it("probes the Target's own loopback, not a container's", () => {
     const script = appsQueryScript('/home/op/.sandcastle-vps')
-    expect(script).toContain('docker compose exec -T harness')
-    expect(script).toContain('http://inngest:8288/v0/gql')
+    expect(script).toContain('docker run --rm --network host')
+    expect(script).toContain('http://127.0.0.1:8288/v0/gql')
+  })
+
+  it('borrows the image the install just built, rather than pulling one', () => {
+    expect(appsQueryScript('/opt/x')).toContain('docker compose images -q harness')
   })
 
   // The Target is not required to have curl — preflight asks for Docker and
   // nothing else — so every HTTP probe has to run in a container we ship.
   it('never asks the Target itself for an HTTP client', () => {
-    expect(dispatchProbeScript('/opt/x', 3000, 'nope')).toContain('docker compose exec -T harness')
+    const script = dispatchProbeScript('/opt/x', 3000, 'nope')
+    expect(script).toContain('docker run --rm --network host')
+    expect(script).toContain('curl')
+  })
+
+  // The published Dispatch port is the surface being checked; hitting any
+  // other one would be checking something an operator never uses.
+  it('sends the Dispatch to the port the Target publishes', () => {
+    expect(dispatchProbeScript('/opt/x', 3399, 'nope')).toContain('http://127.0.0.1:3399/dispatch')
   })
 
   it('quotes the install directory, which the operator chose', () => {
@@ -202,9 +217,9 @@ describe('verifyInstall', () => {
       ['/dispatch', 'body\n400'],
     ])
     expect(await verifyInstall(connector, options)).toEqual([
-      expect.objectContaining({ label: 'harness synced', ok: true }),
+      expect.objectContaining({ label: 'Harness synced', ok: true }),
       expect.objectContaining({ label: 'loopback only', ok: true }),
-      expect.objectContaining({ label: 'dispatch refuses', ok: true }),
+      expect.objectContaining({ label: 'Dispatch refuses', ok: true }),
     ])
   })
 
@@ -260,9 +275,9 @@ describe('formatChecks', () => {
   // exactly that wide printed "dispatch refuses400 for a Project…".
   it('leaves a gap after the longest label', () => {
     const line = formatChecks([
-      { ok: true, label: 'dispatch refuses', detail: '400 for a Project that does not exist' },
+      { ok: true, label: 'Dispatch refuses', detail: '400 for a Project that does not exist' },
     ])
-    expect(line).toContain('dispatch refuses  400')
+    expect(line).toContain('Dispatch refuses  400')
   })
 
   it('marks a failing check so it can be found in a scroll-back', () => {
