@@ -14,3 +14,10 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+
+    # In step with minimumReleaseAge in pnpm-workspace.yaml (3 days), so a
+    # routine bump is never proposed while pnpm would still reject it.
+    # Security updates bypass cooldown by design — those can land inside the
+    # window and need the exclude escape hatch described there.
+    cooldown:
+      default-days: 3
