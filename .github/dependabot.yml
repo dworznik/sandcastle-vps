@@ -1,0 +1,16 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+    # Load-bearing. Dependabot's default prefix is `build(deps):`, and `build`
+    # is not one of the seven types commitlint.config.js allows — so the
+    # `commit conventions` CI job rejects the PR title, and a security update
+    # sits unmergeable behind a naming rule. Two abandoned Dependabot branches
+    # on this repo already carried `build(deps):` subjects.
+    commit-message:
+      prefix: chore
+      include: scope
