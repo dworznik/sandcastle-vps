@@ -65,6 +65,16 @@ gitleaks, configured in `.gitleaks.toml`, which extends the default ruleset rath
 
 What no scanner ships is a rule for Anthropic tokens, the one credential this platform handles by design: `claude setup-token` output, per-Project `.sandcastle/.env` files. `.gitleaks.toml` adds one. Its `{80,}` length threshold is load-bearing — it fires on real token lengths while staying silent on the deliberately short token-shaped fixtures in `scripts/agent-token.test.ts`, which is why no allowlist entry exists. Do not add a file-level ignore for that file: it is the single most likely place a real token would later land.
 
+### Dependencies
+
+`minimumReleaseAge: 4320` in `pnpm-workspace.yaml` refuses any version published in the last three days, on every path in — a local `pnpm add` as much as a Dependabot bump. It is enforced at install time, not just resolution: `pnpm install --frozen-lockfile` fails with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` on a lockfile entry inside the window, so a too-fresh commit turns CI red.
+
+`.github/dependabot.yml` sets `cooldown.default-days: 3` to match, so Dependabot never proposes a routine bump that pnpm would then reject. It also sets `commit-message.prefix: chore`, without which its default `build(deps):` fails the `commits` job.
+
+**Dependabot security updates bypass cooldown by design**, so a freshly published security fix does hit the window — the one case where the two settings cannot be kept in step. To take one sooner, add that package to `minimumReleaseAgeExclude`, merge, then remove the entry. `minimumReleaseAgeStrict` does not help here; only the per-package exclude does.
+
+Raising the window means checking it against the current lockfile first — seven days does not pass today.
+
 ### Hooks
 
 `.githooks/`, activated by `core.hooksPath`, which the `prepare` script sets on a plain `pnpm install`. **If you cloned before this landed, run `pnpm install` again — nothing turns the hooks on until you do.**

@@ -1,3 +1,17 @@
+# No dependency version published in the last three days, on any path in —
+# `pnpm add` locally as much as a Dependabot bump. Three days is the window in
+# which a compromised release is usually caught and yanked.
+#
+# 4320 minutes; the unit is minutes, not days. Kept in step with
+# `cooldown.default-days` in .github/dependabot.yml, so Dependabot never opens
+# a routine PR that this would then reject.
+#
+# The cost, accepted knowingly: Dependabot security updates bypass its own
+# cooldown, so a freshly published security fix IS blocked here, for up to
+# three days. To take one sooner, add that package to
+# minimumReleaseAgeExclude, merge, and remove the entry afterwards.
+minimumReleaseAge: 4320
+
 allowBuilds:
   # vitest's bundler — its postinstall fetches the platform binary.
   esbuild: true

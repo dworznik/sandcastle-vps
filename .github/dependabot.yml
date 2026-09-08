@@ -1,0 +1,23 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+    # Load-bearing. Dependabot's default prefix is `build(deps):`, and `build`
+    # is not one of the seven types commitlint.config.js allows — so the
+    # `commit conventions` CI job rejects the PR title, and a security update
+    # sits unmergeable behind a naming rule. Two abandoned Dependabot branches
+    # on this repo already carried `build(deps):` subjects.
+    commit-message:
+      prefix: chore
+      include: scope
+
+    # In step with minimumReleaseAge in pnpm-workspace.yaml (3 days), so a
+    # routine bump is never proposed while pnpm would still reject it.
+    # Security updates bypass cooldown by design — those can land inside the
+    # window and need the exclude escape hatch described there.
+    cooldown:
+      default-days: 3
