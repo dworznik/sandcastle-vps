@@ -1,5 +1,6 @@
 import { Inngest, eventType } from 'inngest'
 import { z } from 'zod'
+import { APP_ID } from './app-id.js'
 
 export const runRequestedData = z.object({
   /** Directory name of a Project under the workspace root. */
@@ -17,4 +18,4 @@ export const runRequested = eventType('sandcastle/run.requested', {
   schema: runRequestedData,
 })
 
-export const inngest = new Inngest({ id: 'sandcastle-vps' })
+export const inngest = new Inngest({ id: APP_ID })

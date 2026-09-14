@@ -1,5 +1,6 @@
 import { claudeCode, run } from '@ai-hero/sandcastle'
 import { docker } from '@ai-hero/sandcastle/sandboxes/docker'
+import { agentSandbox } from '../agent.js'
 import { taskBranch, validateBranch } from '../branch.js'
 import { env } from '../env.js'
 import { ensureSandboxImage } from '../image.js'
@@ -24,6 +25,10 @@ export const sandcastleRun = inngest.createFunction(
     const model = event.data.model ?? env.defaultModel
     const { imageName } = project
 
+    // Before the image build, which can take half an hour: a Run that is going
+    // to fail for want of a credential should fail in the first second.
+    const agent = agentSandbox(env.credentials)
+
     const { built } = await ensureSandboxImage(project)
     logger.info('starting run', {
       project: project.name,
@@ -36,10 +41,14 @@ export const sandcastleRun = inngest.createFunction(
     const result = await run({
       cwd: project.path,
       prompt: event.data.task,
-      // No credentials from the harness: `cwd` anchors sandcastle's env
-      // resolver on the Project's own .sandcastle/.env (ADR 0003).
       agent: claudeCode(model),
-      sandbox: docker({ imageName }),
+      // The credentials are the Harness's and last one Run (ADR 0006). They
+      // ride the sandbox provider because that is what puts them on the
+      // container itself, where the git-setup hook below can read them too —
+      // and because provider env wins over anything a Project happens to have
+      // left in a `.sandcastle/.env`, which is no longer written or needed.
+      sandbox: docker({ imageName, env: agent.env, mounts: agent.mounts }),
+      hooks: agent.hooks,
       // Task Branch only — head/merge-to-head are forbidden on shared
       // checkouts. See ADR 0001.
       branchStrategy: { type: 'branch', branch },

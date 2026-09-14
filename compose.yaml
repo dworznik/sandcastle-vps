@@ -54,10 +54,20 @@ services:
     group_add:
       - '${DOCKER_GID:?read off the Target by the deploy}'
     environment:
-      # Orchestration settings only. Agent credentials are not here yet — they
-      # arrive with the Harness-held credential model.
       WORKSPACE_ROOT: ${WORKSPACE_ROOT:?set to the directory holding the Project checkouts}
       AGENT_MODEL: ${AGENT_MODEL:-claude-opus-4-8}
+      # The agent's identity, held by the Harness and injected into each
+      # Sandbox for the life of one Run (ADR 0006). Every one of these may be
+      # empty: the install brings the stack up before the wizard has captured
+      # anything, and a Run names whatever is still missing.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      AGENT_GIT_NAME: ${AGENT_GIT_NAME:-}
+      AGENT_GIT_EMAIL: ${AGENT_GIT_EMAIL:-}
+      # Derived here so the path can only exist once: it is both the file the
+      # Harness looks for and the bind source the Target's daemon resolves when
+      # a Sandbox mounts it, and two settings could disagree.
+      AGENT_SIGNING_KEY: ${SECRETS_DIR:?set to the directory holding the signing key}/agent_signing_key
       INNGEST_BASE_URL: http://inngest:8288
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY}
@@ -75,6 +85,12 @@ services:
       # daemon, so a worktree path inside the Harness has to be that same path
       # on the Target.
       - ${WORKSPACE_ROOT}:${WORKSPACE_ROOT}
+      # The signing key, for the same reason — the Harness names it as a
+      # Sandbox's bind source, so it has to be the same path in both. A
+      # directory rather than the file: Docker creates a *directory* for a bind
+      # source that does not exist, and the key does not exist until the
+      # wizard generates it. Read-only, and it holds nothing else.
+      - ${SECRETS_DIR}:${SECRETS_DIR}:ro
     ports:
       # The Dispatch surface is keyless — reachability is its access control —
       # so it is published on Target loopback and nowhere else.

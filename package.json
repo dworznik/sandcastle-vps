@@ -31,7 +31,7 @@
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "cli": "tsx src/cli/main.ts",
+    "cli": "node bin/sandcastle-vps.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "oxlint",

@@ -1,9 +1,15 @@
 import { z } from 'zod'
 
 /**
- * The harness's own runtime settings — orchestration only. Agent credentials
- * and sandbox images belong to each Project, not here: they come from that
- * Project's `.sandcastle/` via sandcastle's own resolvers (ADR 0003).
+ * The Harness's own runtime settings: orchestration, plus the agent's
+ * credentials.
+ *
+ * The credentials are the Harness's, not each Project's — ADR 0006 amends ADR
+ * 0003's clause on that. They are optional here on purpose: the install brings
+ * the stack up before the wizard has captured anything, and a Harness that
+ * refused to start would leave the operator with a restart loop instead of a
+ * running stack to add credentials to. A Run names what is missing instead;
+ * see `agentSandbox`.
  *
  * The Inngest keys are deliberately absent: the SDK reads them from the
  * environment itself, and its dev mode changes which of them are needed at
@@ -29,13 +35,63 @@ const schema = z.object({
    *  running the server directly in development never widens itself. */
   HOST: z.string().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+
+  // ------------------------------------------------------------ credentials
+  //
+  // Each is `.optional()` after trimming an empty string away, because the
+  // Target's environment file scaffolds every key with an empty value: `KEY=`
+  // means "not captured yet", and reading it as the empty string would turn a
+  // missing credential into an unauthenticated Run.
+
+  /** The agent's Claude Code token, passed into each Sandbox under this name —
+   *  which is the name sandcastle's own resolver and Claude Code both use. */
+  CLAUDE_CODE_OAUTH_TOKEN: z.string().min(1).optional(),
+  /** Fine-grained PAT the Sandbox pushes and opens pull requests with. */
+  GH_TOKEN: z.string().min(1).optional(),
+  /** Who a Run's commits are authored by. */
+  AGENT_GIT_NAME: z.string().min(1).optional(),
+  AGENT_GIT_EMAIL: z.string().min(1).optional(),
+  /** The ed25519 signing key, at the path it has *on the Target*: the Sandbox's
+   *  mount is created by the Target's daemon, and the Harness only reaches it
+   *  at all because compose mounts the secrets directory at path parity. */
+  AGENT_SIGNING_KEY: z
+    .string()
+    .min(1)
+    .startsWith('/', 'must be an absolute path — it is also a path on the Target')
+    .optional(),
 })
+
+/**
+ * What a Run needs to commit, sign and push as the operator. Held whole or not
+ * at all: a partial identity would produce unsigned commits or a Run that gets
+ * as far as `git push` before failing.
+ */
+export interface AgentCredentials {
+  readonly agentToken: string
+  readonly githubToken: string
+  readonly gitName: string
+  readonly gitEmail: string
+  /** Absolute path to the private key, identical on the Target and here. */
+  readonly signingKeyPath: string
+}
 
 export interface Env {
   readonly workspaceRoot: string
   readonly defaultModel: string
   readonly host: string
   readonly port: number
+  /** Whatever of the agent's identity the Target has been given so far. */
+  readonly credentials: Partial<AgentCredentials>
+}
+
+/** The environment key each credential is read from, for error messages that
+ *  name something the operator can actually go and set. */
+export const CREDENTIAL_KEYS: Readonly<Record<keyof AgentCredentials, string>> = {
+  agentToken: 'CLAUDE_CODE_OAUTH_TOKEN',
+  githubToken: 'GH_TOKEN',
+  gitName: 'AGENT_GIT_NAME',
+  gitEmail: 'AGENT_GIT_EMAIL',
+  signingKeyPath: 'AGENT_SIGNING_KEY',
 }
 
 /**
@@ -43,15 +99,30 @@ export interface Env {
  * it. Pure, so the failures are testable without a process to kill.
  */
 export const parseEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
-  const parsed = schema.safeParse(source)
+  // `KEY=` is what the Target's environment file scaffolds, so drop the blanks
+  // before parsing: the schema's `.min(1)` would otherwise reject the very
+  // shape a Target has between install and credential capture.
+  const given = { ...source }
+  for (const key of Object.values(CREDENTIAL_KEYS)) {
+    if ((given[key] ?? '').trim() === '') delete given[key]
+  }
+  const parsed = schema.safeParse(given)
   if (!parsed.success) {
     throw new Error(`Incomplete environment:\n${z.prettifyError(parsed.error)}`)
   }
+  const data = parsed.data
   return {
-    workspaceRoot: parsed.data.WORKSPACE_ROOT,
-    defaultModel: parsed.data.AGENT_MODEL,
-    host: parsed.data.HOST,
-    port: parsed.data.PORT,
+    workspaceRoot: data.WORKSPACE_ROOT,
+    defaultModel: data.AGENT_MODEL,
+    host: data.HOST,
+    port: data.PORT,
+    credentials: {
+      agentToken: data.CLAUDE_CODE_OAUTH_TOKEN,
+      githubToken: data.GH_TOKEN,
+      gitName: data.AGENT_GIT_NAME,
+      gitEmail: data.AGENT_GIT_EMAIL,
+      signingKeyPath: data.AGENT_SIGNING_KEY,
+    },
   }
 }
 
@@ -62,7 +133,8 @@ export const parseEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
  * first Dispatch — by which point the operator is reading a failed Run in the
  * Orchestrator to find out that a variable was missing. Failing here instead
  * means compose reports the container as restarting, and the reason is the
- * first thing in its log.
+ * first thing in its log. Credentials are the exception, and deliberately so:
+ * see the schema above.
  */
 export const env: Env = (() => {
   try {

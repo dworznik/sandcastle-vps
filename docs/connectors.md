@@ -88,3 +88,28 @@ manifest's ranges, exactly as any consumer of a published package does, and the
 Harness image build must not require a lockfile. Delivery from a checkout is
 the same code path and gets the same result, so there is no shape that is only
 ever exercised on a developer's machine.
+
+## What the install asks of a Connector
+
+Install/upgrade (`src/cli/install.ts`) is written against `exec` and `putTar`
+and nothing else, which is what makes the three deferred connectors a matter of
+writing a module rather than touching the wizard. Two obligations become
+load-bearing there:
+
+**`exec({ stdin })` carries the Target's environment file.** It holds the
+agent's credentials, so it is never interpolated into a script — a script is an
+argument list other processes on the Target can read. A Connector that cannot
+stream stdin to a command cannot install.
+
+**Everything the install needs of the Target is read off the Target.** The
+operator's uid and gid, the docker group's gid, and the Inngest keys — which
+are generated there, because a secret generated on the operator's machine is a
+secret that travelled. Nothing is guessed from the machine the CLI runs on,
+which is also what keeps a Target that _is_ that machine from being a special
+case.
+
+The verification afterwards (`src/cli/verify.ts`) leans on the same two and
+adds no requirement of its own: it reads `/proc/net/tcp` with `cat` rather than
+asking for iproute2, and runs both of its HTTP probes inside the Harness
+container, whose image ships curl. A Target is never expected to have an HTTP
+client — preflight asks for Docker, and the install may ask for nothing more.

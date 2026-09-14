@@ -11,6 +11,13 @@ describe('parseEnv', () => {
       defaultModel: 'claude-opus-4-8',
       host: '127.0.0.1',
       port: 3000,
+      credentials: {
+        agentToken: undefined,
+        githubToken: undefined,
+        gitName: undefined,
+        gitEmail: undefined,
+        signingKeyPath: undefined,
+      },
     })
   })
 
@@ -49,5 +56,52 @@ describe('parseEnv', () => {
   // Target; a relative one would resolve against whatever cwd happens to be.
   it('insists the workspace root is absolute', () => {
     expect(() => parseEnv({ WORKSPACE_ROOT: 'work' })).toThrow(/absolute/)
+  })
+
+  describe('the agent credentials', () => {
+    const identity = {
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-token',
+      GH_TOKEN: 'github_pat_token',
+      AGENT_GIT_NAME: 'Patryk Dwórznik',
+      AGENT_GIT_EMAIL: 'patryk@example.com',
+      AGENT_SIGNING_KEY: '/srv/sandcastle-vps/secrets/agent_signing_key',
+    }
+
+    it('reads them off the environment the Harness was given', () => {
+      expect(parseEnv({ ...complete, ...identity }).credentials).toEqual({
+        agentToken: 'sk-ant-oat01-token',
+        githubToken: 'github_pat_token',
+        gitName: 'Patryk Dwórznik',
+        gitEmail: 'patryk@example.com',
+        signingKeyPath: '/srv/sandcastle-vps/secrets/agent_signing_key',
+      })
+    })
+
+    // The install brings the stack up before any credential is captured. A
+    // Harness that refused to start here would leave a restart loop instead of
+    // a running stack to add credentials to; the Run says what is missing.
+    it('lets the Harness start without any of them', () => {
+      expect(parseEnv(complete).credentials).toEqual({
+        agentToken: undefined,
+        githubToken: undefined,
+        gitName: undefined,
+        gitEmail: undefined,
+        signingKeyPath: undefined,
+      })
+    })
+
+    // `KEY=` is exactly what the Target's environment file scaffolds, and
+    // reading it as "" rather than as absent would run an unauthenticated Run.
+    it.each(Object.keys(identity))('reads a scaffolded, empty %s as missing', (key) => {
+      const credentials = parseEnv({ ...complete, ...identity, [key]: '' }).credentials
+      expect(Object.values(credentials).filter((value) => value === undefined)).toHaveLength(1)
+    })
+
+    // It is also a path on the Target, where the Sandbox's bind mount is made.
+    it('insists the signing key path is absolute', () => {
+      expect(() => parseEnv({ ...complete, AGENT_SIGNING_KEY: 'secrets/key' })).toThrow(
+        /AGENT_SIGNING_KEY/,
+      )
+    })
   })
 })
