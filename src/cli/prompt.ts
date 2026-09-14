@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline/promises'
+import { Writable } from 'node:stream'
 
 export interface Choice<T> {
   readonly label: string
@@ -7,21 +8,48 @@ export interface Choice<T> {
 
 export interface Prompter {
   text(question: string, fallback?: string): Promise<string>
+  /** A question whose answer is a secret: never echoed, and never defaulted —
+   *  there is no sensible fallback for a credential. */
+  secret(question: string): Promise<string>
   select<T>(question: string, choices: readonly Choice<T>[]): Promise<T>
   confirm(question: string, fallback?: boolean): Promise<boolean>
   close(): void
 }
 
+type Output = NodeJS.WritableStream & { isTTY?: boolean; columns?: number }
+
 /**
- * The wizard's questions. Deliberately plain readline: the answers to these
- * are Target names and paths, and the ones that are secrets are not asked
- * here — credential capture owns its own hidden prompts.
+ * The wizard's questions, including the ones whose answers are credentials.
+ *
+ * Hiding an answer means stopping readline from echoing it, and readline
+ * echoes to whatever stream it was handed — so it is handed a stream this
+ * module can switch off rather than the terminal itself. The alternative,
+ * reaching into `rl._writeToOutput`, is the same idea through a private field.
  */
 export const createPrompter = (
   input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
-  output: NodeJS.WritableStream = process.stdout,
+  output: Output = process.stdout,
 ): Prompter => {
-  const rl = createInterface({ input, output })
+  // Everything readline writes passes through here; everything this module
+  // writes goes straight to `output`, so a question is still printed while the
+  // answer to it is being swallowed.
+  let muted = false
+  const sink = new Writable({
+    write(chunk: Buffer, _encoding, done) {
+      if (!muted) output.write(chunk)
+      done()
+    },
+  })
+  // readline asks its output whether it is a terminal — that is what decides
+  // whether it echoes at all — and how wide the line is. A bare Writable
+  // answers neither, which would turn echo off permanently and line editing
+  // with it.
+  Object.defineProperties(sink, {
+    isTTY: { get: () => output.isTTY },
+    columns: { get: () => output.columns },
+  })
+
+  const rl = createInterface({ input, output: sink, terminal: output.isTTY === true })
   const say = (line: string) => output.write(`${line}\n`)
 
   // Lines are buffered as they arrive rather than pulled one question at a
@@ -43,19 +71,30 @@ export const createPrompter = (
     while (waiting.length > 0) waiting.shift()?.(null)
   })
 
-  const ask = async (query: string): Promise<string> => {
+  const ask = async (query: string, hidden = false): Promise<string> => {
     output.write(query)
-    const buffered = pending.shift()
-    if (buffered !== undefined) {
-      // Echo it: a piped answer never appeared on the terminal by itself, and
-      // a transcript with questions and no answers is unreadable.
-      if (!input.isTTY) say(buffered)
-      return buffered.trim()
+    muted = hidden
+    try {
+      const buffered = pending.shift()
+      if (buffered !== undefined) {
+        // Echo it: a piped answer never appeared on the terminal by itself, and
+        // a transcript with questions and no answers is unreadable. A piped
+        // secret is the one answer that stays off it anyway.
+        if (!input.isTTY && !hidden) say(buffered)
+        return buffered.trim()
+      }
+      if (ended) throw new Error('Input ended before the question was answered.')
+      const line = await new Promise<string | null>((resolve) => waiting.push(resolve))
+      if (line === null) throw new Error('Input ended before the question was answered.')
+      return line.trim()
+    } finally {
+      if (hidden) {
+        muted = false
+        // The newline that ended the answer was swallowed with the rest of the
+        // echo, so without this the next line lands on the question's.
+        output.write('\n')
+      }
     }
-    if (ended) throw new Error('Input ended before the question was answered.')
-    const line = await new Promise<string | null>((resolve) => waiting.push(resolve))
-    if (line === null) throw new Error('Input ended before the question was answered.')
-    return line.trim()
   }
 
   const text: Prompter['text'] = async (question, fallback) => {
@@ -66,6 +105,14 @@ export const createPrompter = (
       if (answer) return answer
       if (fallback !== undefined) return fallback
       say('  An answer is needed.')
+    }
+  }
+
+  const secret: Prompter['secret'] = async (question) => {
+    for (;;) {
+      const answer = await ask(`${question}: `, true)
+      if (answer) return answer
+      say('  An answer is needed. Nothing is echoed — paste it and press enter.')
     }
   }
 
@@ -89,5 +136,5 @@ export const createPrompter = (
     }
   }
 
-  return { text, select, confirm, close: () => rl.close() }
+  return { text, secret, select, confirm, close: () => rl.close() }
 }

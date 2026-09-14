@@ -1,7 +1,9 @@
 import { HELP, parseArgs } from './args.js'
 import { CONNECTORS, connectorFor } from './connectors/index.js'
 import type { Connector, Preflight, PreflightCheck } from './connectors/types.js'
+import { captureCredentials } from './credentials.js'
 import { install } from './install.js'
+import { localShell, type LocalShell } from './local.js'
 import { packageVersion } from './package.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
 import { createPrompter, type Prompter } from './prompt.js'
@@ -19,12 +21,13 @@ import {
 const notBuiltYet = (what: string, issue: number): string =>
   `${what} is not built yet — see issue #${issue}.`
 
-/** One Target, the way to reach it, and the operator answering questions.
- *  These three travel everywhere together. */
+/** One Target, the way to reach it, the operator answering questions, and the
+ *  machine they are answering on. These travel everywhere together. */
 interface Session {
   readonly profile: TargetProfile
   readonly connector: Connector
   readonly prompter: Prompter
+  readonly local: LocalShell
 }
 
 /** A failing check the wizard can actually offer to fix. */
@@ -152,7 +155,19 @@ const installUpgrade = async (session: Session): Promise<void> => {
     console.log('\nThe Target is not ready. Nothing was delivered.')
     return
   }
-  await install(session)
+  // Credentials only follow a stack that came up and checked out. Capturing
+  // them into a Target whose Harness is not answering would walk the operator
+  // through two GitHub pages to reach a restart that cannot fix anything —
+  // and `install` has already printed what to look at instead.
+  if (!(await install(session))) return
+
+  const complete = await captureCredentials(session)
+  console.log(
+    complete
+      ? `\nNext: add a Project. ${notBuiltYet('That', 36)}`
+      : '\nThe Harness is short of a working identity — a Run will name what is missing.' +
+          '\nRe-run install/upgrade to finish capturing it.',
+  )
 }
 
 const menu = async (session: Session): Promise<void> => {
@@ -169,11 +184,13 @@ const menu = async (session: Session): Promise<void> => {
     if (action === 'install') await installUpgrade(session)
     if (action === 'project') console.log(`\n${notBuiltYet('Adding a Project', 36)}`)
     if (action === 'rotate') {
-      // Two issues, one entry: #35 captures credentials for the first time,
-      // #37 rotates them. Naming only one of them is how the install's own
-      // "do this next" ended up pointing at a different number.
+      // Capture and rotation are the same walk over the same questions, and
+      // differ only in which of them are asked and whether an existing value
+      // is overwritten. Install/upgrade already asks for whatever is missing;
+      // what is left for #37 is choosing a subset and replacing what is there.
       console.log(
-        `\n${notBuiltYet('Capturing credentials', 35)}\n${notBuiltYet('Rotating them', 37)}`,
+        `\n${notBuiltYet('Choosing which credentials to replace', 37)}\n` +
+          'Install / upgrade captures whichever the Target does not hold yet.',
       )
     }
     if (action === 'status') console.log(`\n${notBuiltYet('Status', 37)}`)
@@ -191,7 +208,7 @@ export const runCli = async (argv: readonly string[]): Promise<number> => {
     console.log(`sandcastle-vps ${await packageVersion()}`)
     prompter = createPrompter()
     const profile = await chooseTarget(prompter, args.target)
-    await menu({ profile, connector: connectorFor(profile), prompter })
+    await menu({ profile, connector: connectorFor(profile), prompter, local: localShell() })
     return 0
   } catch (error) {
     console.error(`\n${error instanceof Error ? error.message : String(error)}`)

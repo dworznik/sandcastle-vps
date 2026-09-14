@@ -176,7 +176,9 @@ export interface InstallSession {
   readonly connector: Connector
 }
 
-const fail = (what: string, code: number, stderr: string): Error =>
+/** One shape for "a command on the Target did not work", so the credential
+ *  step and the install report a failed `exec` the same way. */
+export const fail = (what: string, code: number, stderr: string): Error =>
   new Error(`${what} failed (exit ${code}): ${stderr.trim().split('\n').at(-1) ?? 'no output'}`)
 
 /** Ship this package's own contents to the Target — the package *is* the
@@ -283,9 +285,8 @@ export const nextSteps = (
   }
   return [
     '',
-    'Next: give the Harness its credentials — until it has them, every Run refuses',
-    'to start and names what is missing. Capturing them is not built yet — see',
-    'issue #35.',
+    'The stack is up. Its credentials come next — until the Harness holds them,',
+    'every Run refuses to start and names what is missing.',
     '',
     `Dashboard: ssh -L 8288:127.0.0.1:8288 ${profile.host}, then open http://127.0.0.1:8288`,
     `Dispatch:  the Harness answers on the Target's 127.0.0.1:${port}`,
