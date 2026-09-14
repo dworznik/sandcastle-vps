@@ -91,38 +91,53 @@ const chooseTarget = async (prompter: Prompter, wanted?: string): Promise<Target
   return choice === null ? createTarget(prompter) : readTarget(choice)
 }
 
+/**
+ * How many times to offer remedies before giving up. Two is the real depth —
+ * install Docker, then join its group — and the third is slack for a Connector
+ * whose checks reveal more than one layer.
+ */
+const REMEDY_PASSES = 3
+
 /** Run the checks and show them; offer to fix what can be fixed from here. */
 const checkTarget = async ({ profile, connector, prompter }: Session): Promise<Preflight> => {
   console.log(`\nChecking the Target (${describeTarget(profile)})…`)
   let preflight = await connector.preflight()
   console.log(formatPreflight(preflight))
-  if (preflight.ok) return preflight
 
-  const fixable = preflight.checks.filter(isFixable)
-  if (fixable.length === 0) return preflight
-  if (!preflight.canElevate) {
-    console.log(
-      '\nRun the commands above on the Target yourself — elevation here needs a password.',
-    )
-    return preflight
-  }
-  if (
-    !(await prompter.confirm(`\nRun ${fixable.length === 1 ? 'that' : 'those'} on the Target now?`))
-  ) {
-    return preflight
-  }
-
-  for (const check of fixable) {
-    console.log(`\n  ${remedyCommand(check)}`)
-    const { code, stderr } = await connector.exec(check.remedy, { sudo: true })
-    if (code !== 0) {
-      console.log(`  failed (exit ${code}): ${stderr.trim().split('\n').at(-1) ?? ''}`)
+  // Remedies cascade: on a bare Target the docker-group check cannot even run
+  // until Docker exists, so installing Docker is what reveals it. One pass of
+  // fixes would print that newly-revealed failure without ever offering it,
+  // and a bare Target would need two invocations to install. Bounded, so a
+  // remedy that never takes cannot spin.
+  for (let pass = 0; pass < REMEDY_PASSES && !preflight.ok; pass += 1) {
+    const fixable = preflight.checks.filter(isFixable)
+    if (fixable.length === 0) return preflight
+    if (!preflight.canElevate) {
+      console.log(
+        '\nRun the commands above on the Target yourself — elevation here needs a password.',
+      )
+      return preflight
     }
-  }
+    if (
+      !(await prompter.confirm(
+        `\nRun ${fixable.length === 1 ? 'that' : 'those'} on the Target now?`,
+      ))
+    ) {
+      return preflight
+    }
 
-  console.log('\nRe-checking…')
-  preflight = await connector.preflight()
-  console.log(formatPreflight(preflight))
+    for (const check of fixable) {
+      console.log(`\n  ${remedyCommand(check)}`)
+      const { code, stderr } = await connector.exec(check.remedy, { sudo: true })
+      if (code !== 0) {
+        console.log(`  failed (exit ${code}): ${stderr.trim().split('\n').at(-1) ?? ''}`)
+      }
+    }
+
+    console.log('\nRe-checking…')
+    preflight = await connector.preflight()
+    console.log(formatPreflight(preflight))
+  }
   return preflight
 }
 
