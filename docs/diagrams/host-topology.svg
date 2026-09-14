@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 720" width="1300" height="720" role="img">
   <title>Sandcastle host topology</title>
-  <desc>Two hosts side by side. Left: your Mac, holding the claude CLI, the deploy script and a browser, and inside it the OrbStack machine sandcastle-vps. Its Docker engine holds one compose project, sandcastle-vps, whose two services — the Harness and inngest — sit on one network and reach each other by service name; the Harness mounts the engine socket and the workspace root at the same path, and spawns one ephemeral sandbox container per Run as a sibling of itself rather than a compose service. Below them, the filesystem: the install directory and the ~/work checkouts. Right: the real VPS, where this session runs inside the claude-tmux-dev container that bind-mounts /home/patryk and the Docker socket; the same compose project and the per-Run sandboxes are drawn dashed because they are not deployed there yet. Sandboxes and claude-tmux-dev share the checkout on disk, never a container.</desc>
+  <desc>Two hosts side by side. Left: your Mac, holding the claude CLI, the deploy script and a browser, and inside it the OrbStack machine sandcastle-vps. Its Docker engine holds one compose project, sandcastle-vps, whose two services — the Harness and inngest — sit on one network and reach each other by service name; the Harness mounts the engine socket and the workspace root at the same path, and spawns one ephemeral sandbox container per Run as a sibling of itself rather than a compose service. Below them, the filesystem: the install directory and the ~/work checkouts. Right: the real VPS, where this session runs inside the claude-tmux-dev container that bind-mounts /home/&lt;operator&gt; and the Docker socket; the same compose project and the per-Run sandboxes are drawn dashed because they are not deployed there yet. Sandboxes and claude-tmux-dev share the checkout on disk, never a container.</desc>
   <style>
     /* Standalone copy of the page's tokens. A committed SVG is usually viewed
        as an image, which loads no external stylesheet and no webfont — hence
@@ -82,7 +82,7 @@
 <text class="lbl" x="330" y="458">Claude Code + gh + skills, as user agent</text>
 
 <rect class="group solid" x="60" y="498" width="530" height="172" rx="6"/>
-<text class="group-t" x="76" y="520">FILESYSTEM · /home/patryk</text>
+<text class="group-t" x="76" y="520">FILESYSTEM · /home/&lt;operator&gt;</text>
 <g class="node"><rect x="80" y="540" width="230" height="62" rx="4"/><text class="t" x="92" y="559">~/.sandcastle-vps/</text><text class="s" x="92" y="574">the package + compose.yaml</text><text class="s" x="92" y="588">.env · paths, UIDs, Inngest keys</text></g>
 <g class="node"><rect x="330" y="540" width="230" height="62" rx="4"/><text class="t" x="342" y="559">~/work/&lt;project&gt;/</text><text class="s" x="342" y="574">checkout · .sandcastle/ · image</text><text class="s" x="342" y="588">.sandcastle/worktrees/&lt;branch&gt;</text></g>
 <text class="lbl" x="80" y="626">Task Branch commits land here — on disk, not in any container</text>
@@ -107,8 +107,8 @@
 
 <rect class="group solid" x="690" y="70" width="570" height="320" rx="6"/>
 <text class="group-t" x="706" y="92">DOCKER ENGINE · the socket claude-tmux-dev mounts</text>
-<g class="node here"><rect x="710" y="108" width="270" height="78" rx="4"/><text class="t" x="722" y="128">claude-tmux-dev  ← this session</text><text class="s" x="722" y="143">Claude Code, user dev, hostname agent</text><text class="s" x="722" y="157">mounts /home/patryk (rw)</text><text class="s" x="722" y="171">mounts /var/run/docker.sock</text></g>
-<g class="node faint"><rect x="1000" y="108" width="240" height="78" rx="4"/><text class="t" x="1012" y="128">other containers</text><text class="s" x="1012" y="143">claude-tmux-wireguard · ddns</text><text class="s" x="1012" y="157">booksmart-postgres · content-mine</text><text class="s" x="1012" y="171">caddy-waku · nwaku ×2</text></g>
+<g class="node here"><rect x="710" y="108" width="270" height="78" rx="4"/><text class="t" x="722" y="128">claude-tmux-dev  ← this session</text><text class="s" x="722" y="143">Claude Code, user dev, hostname agent</text><text class="s" x="722" y="157">mounts /home/&lt;operator&gt; (rw)</text><text class="s" x="722" y="171">mounts /var/run/docker.sock</text></g>
+<g class="node faint"><rect x="1000" y="108" width="240" height="78" rx="4"/><text class="t" x="1012" y="128">other containers</text><text class="s" x="1012" y="143">unrelated to this project</text><text class="s" x="1012" y="157">sharing the same engine</text></g>
 
 <rect class="group" x="856" y="196" width="388" height="100" rx="6"/>
 <text class="group-t" x="868" y="214">COMPOSE PROJECT · not deployed here yet</text>
@@ -119,7 +119,7 @@
 <g class="node open"><rect x="970" y="325" width="240" height="50" rx="4"/><text class="t" x="982" y="344">sandcastle-&lt;uuid&gt;</text><text class="s" x="982" y="359">one per Run, never claude-tmux-dev</text></g>
 
 <rect class="group solid" x="690" y="400" width="570" height="240" rx="6"/>
-<text class="group-t" x="706" y="422">FILESYSTEM · /home/patryk · the workspace root</text>
+<text class="group-t" x="706" y="422">FILESYSTEM · /home/&lt;operator&gt; · the workspace root</text>
 <g class="node"><rect x="710" y="442" width="250" height="64" rx="4"/><text class="t" x="722" y="461">sandcastle-vps/</text><text class="s" x="722" y="476">sandcastle-todo-app/</text><text class="s" x="722" y="490">the checkouts you work in</text></g>
 <g class="node open"><rect x="990" y="442" width="250" height="64" rx="4"/><text class="t" x="1002" y="461">.sandcastle/worktrees/&lt;branch&gt;</text><text class="s" x="1002" y="476">created per Task Branch</text><text class="s" x="1002" y="490">what a sandbox bind-mounts</text></g>
 <g class="node open"><rect x="710" y="536" width="250" height="56" rx="4"/><text class="t" x="722" y="555">~/.sandcastle-vps/</text><text class="s" x="722" y="570">the install directory</text><text class="s" x="722" y="584">compose.yaml · .env · the package</text></g>
