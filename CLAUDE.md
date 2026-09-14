@@ -63,7 +63,9 @@ The standing cost of oxlint, knowingly accepted: `oxlint-tsgolint` is version-lo
 
 gitleaks, configured in `.gitleaks.toml`, which extends the default ruleset rather than replacing it. The defaults already catch an AWS key and — through `generic-api-key` — a high-entropy value assigned to a secret-named variable such as `INNGEST_SIGNING_KEY`.
 
-What no scanner ships is a rule for Anthropic tokens, the one credential this platform handles by design: `claude setup-token` output, per-Project `.sandcastle/.env` files. `.gitleaks.toml` adds one. Its `{80,}` length threshold is load-bearing — it fires on real token lengths while staying silent on the deliberately short token-shaped fixtures in `scripts/agent-token.test.ts`, which is why no allowlist entry exists. Do not add a file-level ignore for that file: it is the single most likely place a real token would later land.
+What no scanner ships is a rule for Anthropic tokens, the one credential this platform handles by design: `claude setup-token` output, per-Project `.sandcastle/.env` files. `.gitleaks.toml` adds one. Its `{80,}` length threshold is load-bearing — it fires on real token lengths while staying silent on the deliberately short token-shaped fixtures the test suite needs, which is why no allowlist entry exists.
+
+Those fixtures live in `scripts/agent-token.test.ts`, `src/cli/credentials.test.ts` and `src/cli/prompt.test.ts`. Keep any new one under 80 characters and it stays silent on its own. Do not add a file-level ignore to buy the same silence: these files are the single most likely place a real token would later land, and an ignore is exactly what would let it through.
 
 ### Dependencies
 

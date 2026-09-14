@@ -169,6 +169,21 @@ chmod 700 ${secrets}`
 export const composeScript = (installDir: string, args: string): string =>
   `cd ${shellQuote(installDir)} && docker compose ${args}`
 
+/**
+ * Put this content in the Target's environment file, or say why it could not
+ * be. Both the install and the credential step write that file, and both must
+ * send it the same way — over stdin, never in the script — so there is one
+ * function rather than two copies to keep honest.
+ */
+export const writeTargetEnv = async (
+  connector: Connector,
+  installDir: string,
+  content: string,
+): Promise<void> => {
+  const written = await connector.exec(writeEnvScript(installDir), { stdin: content })
+  if (written.code !== 0) throw fail('Writing the environment file', written.code, written.stderr)
+}
+
 /** Everything the install needs of a Target. The prompter is not among them:
  *  install/upgrade asks nothing, which is what lets a re-run be idempotent. */
 export interface InstallSession {
@@ -176,7 +191,9 @@ export interface InstallSession {
   readonly connector: Connector
 }
 
-const fail = (what: string, code: number, stderr: string): Error =>
+/** One shape for "a command on the Target did not work", so the credential
+ *  step and the install report a failed `exec` the same way. */
+export const fail = (what: string, code: number, stderr: string): Error =>
   new Error(`${what} failed (exit ${code}): ${stderr.trim().split('\n').at(-1) ?? 'no output'}`)
 
 /** Ship this package's own contents to the Target — the package *is* the
@@ -226,8 +243,7 @@ export const provision = async (
   // and an upgrade in place safe. An operator's edit and a captured credential
   // both survive it.
   const content = upsertAllEnv(existing, desired, 'seed')
-  const written = await connector.exec(writeEnvScript(profile.installDir), { stdin: content })
-  if (written.code !== 0) throw fail('Writing the environment file', written.code, written.stderr)
+  await writeTargetEnv(connector, profile.installDir, content)
   log(`Wrote ${profile.installDir}/.env (mode 600) and ${secretsDir(profile.installDir)}.`)
 
   log('\nBuilding the Harness image and starting the stack…')
@@ -283,9 +299,8 @@ export const nextSteps = (
   }
   return [
     '',
-    'Next: give the Harness its credentials — until it has them, every Run refuses',
-    'to start and names what is missing. Capturing them is not built yet — see',
-    'issue #35.',
+    'The stack is up. Its credentials come next — until the Harness holds them,',
+    'every Run refuses to start and names what is missing.',
     '',
     `Dashboard: ssh -L 8288:127.0.0.1:8288 ${profile.host}, then open http://127.0.0.1:8288`,
     `Dispatch:  the Harness answers on the Target's 127.0.0.1:${port}`,

@@ -21,8 +21,8 @@ type Mount = NonNullable<DockerOptions['mounts']>[number]
  * `ssh-keygen -Y sign` refuses a private key that is group- or world-readable.
  * So whatever generates the key on the Target owes it mode 600 owned by the
  * operator — the same uid the Sandbox runs as, since sandcastle takes the
- * container's user from this process. That is the wizard's job (#35); this only
- * names the file.
+ * container's user from this process. The wizard's credential capture owes it
+ * that (`src/cli/signing-key.ts`); this only names the file.
  */
 export const SANDBOX_SIGNING_KEY_PATH = '/home/agent/.sandcastle-agent/signing_key'
 
