@@ -91,6 +91,26 @@ describe('createPrompter', () => {
     expect(cli.shown).not.toContain('sk-ant-oat01-notreal')
   })
 
+  // Muting only stops the echo. readline also remembers what was typed, and a
+  // remembered secret is one up-arrow away from the screen at the next
+  // question — a worse leak than the echo, because it happens later and to
+  // someone who has stopped thinking about the token.
+  it('does not keep a typed secret where the next prompt can recall it', async () => {
+    const cli = harness({ tty: true })
+    const first = cli.prompter.secret('Paste the token')
+    cli.type('sk-ant-oat01-notreal\r')
+    await first
+    const second = cli.prompter.text('Name')
+    // Up-arrow, then enter. With a history the token would be recalled,
+    // echoed and returned as the answer; without one the line is empty, so
+    // `text` re-asks — which is why a real answer has to follow.
+    cli.type('[A\r')
+    cli.type('vps\r')
+    expect(await second).toBe('vps')
+    cli.prompter.close()
+    expect(cli.shown).not.toContain('sk-ant-oat01-notreal')
+  })
+
   // The companion to the test above, and the reason it proves anything: the
   // stream readline echoes to is this module's own, and a mistake in it would
   // silence every prompt rather than only the secret — passing the muting test

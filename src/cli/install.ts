@@ -169,6 +169,21 @@ chmod 700 ${secrets}`
 export const composeScript = (installDir: string, args: string): string =>
   `cd ${shellQuote(installDir)} && docker compose ${args}`
 
+/**
+ * Put this content in the Target's environment file, or say why it could not
+ * be. Both the install and the credential step write that file, and both must
+ * send it the same way — over stdin, never in the script — so there is one
+ * function rather than two copies to keep honest.
+ */
+export const writeTargetEnv = async (
+  connector: Connector,
+  installDir: string,
+  content: string,
+): Promise<void> => {
+  const written = await connector.exec(writeEnvScript(installDir), { stdin: content })
+  if (written.code !== 0) throw fail('Writing the environment file', written.code, written.stderr)
+}
+
 /** Everything the install needs of a Target. The prompter is not among them:
  *  install/upgrade asks nothing, which is what lets a re-run be idempotent. */
 export interface InstallSession {
@@ -228,8 +243,7 @@ export const provision = async (
   // and an upgrade in place safe. An operator's edit and a captured credential
   // both survive it.
   const content = upsertAllEnv(existing, desired, 'seed')
-  const written = await connector.exec(writeEnvScript(profile.installDir), { stdin: content })
-  if (written.code !== 0) throw fail('Writing the environment file', written.code, written.stderr)
+  await writeTargetEnv(connector, profile.installDir, content)
   log(`Wrote ${profile.installDir}/.env (mode 600) and ${secretsDir(profile.installDir)}.`)
 
   log('\nBuilding the Harness image and starting the stack…')

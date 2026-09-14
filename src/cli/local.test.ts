@@ -45,7 +45,6 @@ describe('openCommand', () => {
       'xdg-open',
       ['https://example.com'],
     ])
-    expect(openCommand('https://example.com', 'win32')[0]).toBe('cmd')
   })
 })
 

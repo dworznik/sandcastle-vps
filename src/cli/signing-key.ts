@@ -1,6 +1,7 @@
 import { secretsDir } from './install.js'
 import { parseProbe } from './preflight.js'
 import { shellQuote } from './shell.js'
+import { readEnv } from './target-env.js'
 
 /**
  * The agent's commit-signing key, which is generated on the Target and never
@@ -22,8 +23,24 @@ import { shellQuote } from './shell.js'
  */
 export const KEY_FILE = 'agent_signing_key'
 
-export const signingKeyPath = (installDir: string): string =>
-  `${secretsDir(installDir)}/${KEY_FILE}`
+/**
+ * Where the key belongs on this Target.
+ *
+ * Read out of the Target's own environment file rather than derived from the
+ * profile, because those two can legitimately disagree: the install *seeds*
+ * `SECRETS_DIR` and never overwrites it, and `divergences` deliberately keeps
+ * the stored value while only reporting the one it would have written. Point a
+ * profile at a new `installDir` and deriving the path here would write the key
+ * under the new directory while the Harness — which reads what compose built
+ * from the stored `SECRETS_DIR` — went on looking under the old one. The
+ * symptom is `agent.ts`'s "there is no file there", on a Target, after an
+ * install that reported success.
+ *
+ * The profile is the fallback for the one case where the file cannot answer:
+ * a Target with no environment file yet.
+ */
+export const signingKeyPath = (installDir: string, envContent = ''): string =>
+  `${readEnv(envContent, 'SECRETS_DIR') ?? secretsDir(installDir)}/${KEY_FILE}`
 
 /**
  * Generate the key if it is not there, and report the public half either way.
@@ -38,8 +55,8 @@ export const signingKeyPath = (installDir: string): string =>
  * a value, the way preflight reports a missing Docker, because the wizard has
  * something useful to say about it and a non-zero exit would only say "failed".
  */
-export const ensureKeyScript = (installDir: string, comment: string): string => {
-  const key = shellQuote(signingKeyPath(installDir))
+export const ensureKeyScript = (keyPath: string, comment: string): string => {
+  const key = shellQuote(keyPath)
   return `set -eu
 umask 077
 key=${key}

@@ -17,6 +17,21 @@ describe('signingKeyPath', () => {
     expect(signingKeyPath(INSTALL_DIR)).toBe(`${INSTALL_DIR}/secrets/${KEY_FILE}`)
   })
 
+  // The install *seeds* SECRETS_DIR and never overwrites it, and `divergences`
+  // deliberately keeps the stored value while only reporting the one it would
+  // have written. So a profile repointed at a new installDir leaves the two
+  // disagreeing — and deriving the path from the profile would write the key
+  // somewhere the Harness is not looking, which surfaces as agent.ts's "there
+  // is no file there" on the first Run.
+  it('follows the Target, not the profile, when the two disagree', () => {
+    const env = 'SECRETS_DIR=/srv/sandcastle/secrets\nWORKSPACE_ROOT=/home/op/work\n'
+    expect(signingKeyPath(INSTALL_DIR, env)).toBe(`/srv/sandcastle/secrets/${KEY_FILE}`)
+  })
+
+  it('falls back to the profile for a Target with no environment file yet', () => {
+    expect(signingKeyPath(INSTALL_DIR, 'SECRETS_DIR=\n')).toBe(`${INSTALL_DIR}/secrets/${KEY_FILE}`)
+  })
+
   // compose derives AGENT_SIGNING_KEY from SECRETS_DIR and this file name, and
   // the Harness reads the path compose gives it. If the two ever disagree the
   // Harness looks for a key that is not there — and the first sign of it is a
@@ -30,7 +45,7 @@ describe('signingKeyPath', () => {
 })
 
 describe('ensureKeyScript', () => {
-  const script = ensureKeyScript(INSTALL_DIR, 'agent@example.com')
+  const script = ensureKeyScript(signingKeyPath(INSTALL_DIR), 'agent@example.com')
 
   // Nothing is at the Target's terminal to type a passphrase when a Run signs
   // a commit, so a key with one is a key that hangs every Run.
@@ -57,7 +72,7 @@ describe('ensureKeyScript', () => {
   })
 
   it('quotes the comment it was handed, rather than pasting it into a command', () => {
-    expect(ensureKeyScript(INSTALL_DIR, "o'brien@example.com")).toContain(
+    expect(ensureKeyScript(signingKeyPath(INSTALL_DIR), "o'brien@example.com")).toContain(
       `'o'\\''brien@example.com'`,
     )
   })

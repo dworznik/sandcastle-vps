@@ -73,8 +73,8 @@ export const readTokenCheck = (status: number, body: string): Answer => {
   return answered(false, `GitHub answered ${status}`)
 }
 
-/** The API root, overridable only so a test can point somewhere that is not
- *  the internet. GitHub Enterprise is not a Target this platform installs on. */
+/** Hard-coded: GitHub Enterprise is not somewhere this platform installs, and
+ *  the seam a test needs is the `fetch` below rather than the address. */
 const API = 'https://api.github.com'
 
 type Fetch = typeof globalThis.fetch

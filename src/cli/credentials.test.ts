@@ -380,20 +380,38 @@ describe('the GitHub token', () => {
     expect(shown).toContain('authenticates as dworznik')
   })
 
-  // Being unable to install from behind a proxy is not an improvement in
-  // safety — but the escape hatch exists only when GitHub was never asked,
-  // never when it answered "no".
-  it('offers to proceed only when GitHub could not be reached at all', async () => {
-    const offline: typeof globalThis.fetch = () => Promise.reject(new Error('ENOTFOUND'))
-    const { asked, complete } = await run({
-      scripted: { ...ANSWERS, confirm: [true, true] },
-      fetchImpl: offline,
-    })
-    expect(asked).toContain('  Accept it without checking?')
+  // GitHub answering "no" and GitHub not answering are different problems. An
+  // unreachable GitHub says nothing about the token, so re-pasting it is not
+  // the fix — offering the check again is.
+  it('offers the check again, not a different token, when GitHub is unreachable', async () => {
+    let calls = 0
+    const offlineThenUp: typeof globalThis.fetch = () => {
+      calls += 1
+      return calls === 1
+        ? Promise.reject(new Error('ENOTFOUND'))
+        : Promise.resolve(new Response(JSON.stringify({ login: 'dworznik' }), { status: 200 }))
+    }
+    const { asked, complete } = await run({ scripted: ANSWERS, fetchImpl: offlineThenUp })
+    expect(asked).toContain('  Try the check again?')
+    // Asked for the token once: the second check used the same one.
+    expect(asked.filter((question) => question === 'GitHub token')).toHaveLength(1)
     expect(complete).toBe(true)
   })
 
-  it('never offers that for a token GitHub turned down', async () => {
+  // The spec says verified before accepted, so there is no "use it anyway".
+  // Giving up has to be an exit, not a way to write an unchecked token.
+  it('writes nothing rather than accepting a token it could not check', async () => {
+    const offline: typeof globalThis.fetch = () => Promise.reject(new Error('ENOTFOUND'))
+    const { failure, ran, complete } = await run({
+      scripted: { ...ANSWERS, confirm: [false] },
+      fetchImpl: offline,
+    })
+    expect(complete).toBeUndefined()
+    expect(String(failure)).toContain('unchecked token is not written')
+    expect(ran.some((r) => r.stdin.includes(GH_TOKEN))).toBe(false)
+  })
+
+  it('re-asks for the token itself when GitHub turned it down', async () => {
     // Every token is refused, so the flow asks until the script runs out and
     // the prompter gives up. What matters is what it asked on the way: it
     // re-asked for the token, and never offered to skip the check.
@@ -403,7 +421,7 @@ describe('the GitHub token', () => {
     })
     expect(failure).toBeDefined()
     expect(asked.filter((question) => question === 'GitHub token').length).toBeGreaterThan(1)
-    expect(asked).not.toContain('  Accept it without checking?')
+    expect(asked).not.toContain('  Try the check again?')
   })
 })
 

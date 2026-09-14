@@ -49,7 +49,18 @@ export const createPrompter = (
     columns: { get: () => output.columns },
   })
 
-  const rl = createInterface({ input, output: sink, terminal: output.isTTY === true })
+  // No history, because muting only stops the echo. readline otherwise
+  // remembers every line it read, and a remembered token is one up-arrow away
+  // from the screen at the next question — a worse leak than the echo, because
+  // it lands later and in front of someone who has stopped thinking about the
+  // token. Recall is worth nothing here anyway: the other answers are a Target
+  // name and two paths.
+  const rl = createInterface({
+    input,
+    output: sink,
+    terminal: output.isTTY === true,
+    historySize: 0,
+  })
   const say = (line: string) => output.write(`${line}\n`)
 
   // Lines are buffered as they arrive rather than pulled one question at a

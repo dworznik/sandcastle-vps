@@ -58,10 +58,11 @@ export const onPath = async (command: string, path = process.env.PATH ?? ''): Pr
   return false
 }
 
-/** The opener for this platform, and its arguments. */
+/** The opener for this platform. Two, for the two kinds of dev machine the
+ *  creator CLI supports — Windows is out of scope for the same reason as
+ *  above, and `open` is best-effort anyway. */
 export const openCommand = (url: string, platform = process.platform): [string, string[]] => {
   if (platform === 'darwin') return ['open', [url]]
-  if (platform === 'win32') return ['cmd', ['/c', 'start', '', url]]
   return ['xdg-open', [url]]
 }
 

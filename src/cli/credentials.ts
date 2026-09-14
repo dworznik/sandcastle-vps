@@ -6,12 +6,12 @@ import {
   checkToken,
   isRegistered,
 } from './github.js'
-import { composeScript, fail, harnessPort, readEnvScript, writeEnvScript } from './install.js'
+import { composeScript, fail, harnessPort, readEnvScript, writeTargetEnv } from './install.js'
 import type { LocalShell } from './local.js'
 import type { Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
 import { ensureKeyScript, parseSigningKey, signingKeyPath } from './signing-key.js'
-import { readEnv, upsertAllEnv, type UpsertMode } from './target-env.js'
+import { readEnv, upsertAllEnv } from './target-env.js'
 import { formatChecks, verifyInstall, type VerifyOptions } from './verify.js'
 
 /**
@@ -54,13 +54,18 @@ export type CredentialName = keyof typeof CREDENTIAL_ENV
 
 /** Asked in this order because the signing key's comment is the agent's email,
  *  so the identity has to be known before the key is generated. */
-export const ORDER: readonly CredentialName[] = ['agentToken', 'githubToken', 'gitName', 'gitEmail']
+const CAPTURE_ORDER: readonly CredentialName[] = [
+  'agentToken',
+  'githubToken',
+  'gitName',
+  'gitEmail',
+]
 
 /** Which of them the Target does not hold yet. An empty `KEY=` is what the
  *  environment file scaffolds, and `readEnv` already reads that as absent —
  *  the same reading the Harness itself makes. */
 export const missing = (envContent: string): CredentialName[] =>
-  ORDER.filter((name) => readEnv(envContent, CREDENTIAL_ENV[name]) === undefined)
+  CAPTURE_ORDER.filter((name) => readEnv(envContent, CREDENTIAL_ENV[name]) === undefined)
 
 /**
  * The token in `claude setup-token`'s output.
@@ -133,14 +138,25 @@ const captureGithubToken = async (
 
   for (;;) {
     const token = await prompter.secret('GitHub token')
-    const answer = await checkToken(token, fetchImpl)
-    log(`  ${answer.detail}`)
-    if (answer.ok) return token
-    // A token GitHub rejected is never accepted — that is the point of asking.
-    // A token GitHub was never asked about is a different failure, and being
-    // unable to install from behind a proxy is not an improvement in safety.
-    if (!answer.reached && (await prompter.confirm('  Accept it without checking?'))) {
-      return token
+    for (;;) {
+      const answer = await checkToken(token, fetchImpl)
+      log(`  ${answer.detail}`)
+      // An unverified token is never written — a token that only fails at
+      // `git push`, inside a Run, an hour later, is the failure this step
+      // exists to prevent.
+      if (answer.ok) return token
+      // GitHub answering "no" and GitHub not answering are different problems.
+      // A rejected token means paste a different one; an unreachable GitHub
+      // means the same token may be fine, so offer the check again rather than
+      // making the operator re-paste something that was never the issue.
+      if (answer.reached) break
+      if (!(await prompter.confirm('  Try the check again?', true))) {
+        throw new Error(
+          'GitHub could not be reached to check the token, and an unchecked token is not ' +
+            'written. The credentials already captured are on the Target; re-run ' +
+            'install/upgrade to finish.',
+        )
+      }
     }
   }
 }
@@ -177,32 +193,55 @@ const CAPTURE: Record<CredentialName, (session: CredentialSession, log: Log) => 
 // --------------------------------------------------------------- signing key
 
 /**
- * Confirm the operator registered the key, by asking GitHub rather than asking
- * them.
+ * Ask GitHub once whether it holds this key for signing. `undefined` means it
+ * could not be asked, which is a third answer and not a "no".
  *
  * `gh` and not the PAT just captured: reading an account's signing keys needs a
  * user-level permission a fine-grained repository token does not carry, and
- * `gh` is already authenticated as the operator. Without it this falls back to
- * taking their word for it, and says that it is doing so.
+ * `gh` is already authenticated as the operator.
  */
-const confirmRegistration = async (
-  { prompter, local }: CredentialSession,
+const askGitHub = async (
+  { local }: CredentialSession,
+  publicKey: string,
+  log?: Log,
+): Promise<boolean | undefined> => {
+  if (!(await local.has('gh'))) return undefined
+  const { code, stdout, stderr } = await local.run('gh', ['api', 'user/ssh_signing_keys'])
+  if (code !== 0) {
+    log?.(`  gh could not ask: ${stderr.trim().split('\n').at(-1) ?? `it exited ${code}`}`)
+    return undefined
+  }
+  return isRegistered(stdout, publicKey)
+}
+
+/**
+ * Send the operator to the page, then confirm what they did by asking GitHub
+ * rather than by asking them. Without `gh` it can only take their word, and
+ * says that it is doing so.
+ */
+const walkRegistration = async (
+  session: CredentialSession,
   publicKey: string,
   log: Log,
 ): Promise<boolean> => {
+  const { prompter, local } = session
+  log('\n  Register this as a **signing** key — the type is a dropdown on the page:')
+  log(`\n  ${publicKey}\n`)
+  log(`  ${SIGNING_KEY_PAGE}`)
+  await local.open(SIGNING_KEY_PAGE)
+
   if (!(await local.has('gh'))) {
     log('  `gh` is not on this machine, so this cannot confirm the registration from here.')
     return prompter.confirm('  Registered it?', true)
   }
   for (;;) {
     await prompter.confirm('  Registered it? Press enter to check with GitHub', true)
-    const { code, stdout, stderr } = await local.run('gh', ['api', 'user/ssh_signing_keys'])
-    if (code !== 0) {
-      log(`  gh could not ask: ${stderr.trim().split('\n').at(-1) ?? `it exited ${code}`}`)
-    } else if (isRegistered(stdout, publicKey)) {
+    const answer = await askGitHub(session, publicKey, log)
+    if (answer === true) {
       log('  GitHub lists it as a signing key.')
       return true
-    } else {
+    }
+    if (answer === false) {
       log('  GitHub does not list it among the signing keys.')
       // The page adds both kinds and the type is a dropdown, so the key is
       // usually there — as an authentication key, which signs nothing.
@@ -220,66 +259,59 @@ const confirmRegistration = async (
 export const ensureSigningKey = async (
   session: CredentialSession,
   comment: string,
+  envContent: string,
   log: Log,
 ): Promise<boolean> => {
-  const { profile, connector, local } = session
+  const { profile, connector } = session
+  const path = signingKeyPath(profile.installDir, envContent)
   log('\nCommit signing key')
-  const result = await connector.exec(ensureKeyScript(profile.installDir, comment))
+  const result = await connector.exec(ensureKeyScript(path, comment))
   if (result.code !== 0 && result.stdout.trim() === '') {
     throw fail('Generating the signing key', result.code, result.stderr)
   }
   const { publicKey, created } = parseSigningKey(result.stdout)
-  const path = signingKeyPath(profile.installDir)
   log(created ? `  Generated on the Target at ${path}.` : `  Already on the Target at ${path}.`)
 
-  if (!created) {
-    // Re-registering a key it already has is a no-op on GitHub's side, but
-    // sending the operator to a web page on every upgrade is not.
-    const confirmed = await confirmRegistration(session, publicKey, log)
-    if (confirmed) return true
-    log(`\n  ${publicKey}\n`)
-    log(`  Register it as a signing key: ${SIGNING_KEY_PAGE}`)
-    return false
+  // A key that was already there is usually a key that was already registered,
+  // and every upgrade re-runs this. Ask GitHub before asking the operator:
+  // sending them to a web page to re-confirm something that is already true is
+  // how a step people skip gets created.
+  if (!created && (await askGitHub(session, publicKey)) === true) {
+    log('  GitHub already lists it as a signing key.')
+    return true
   }
-
-  log('\n  Register this as a **signing** key — the type is a dropdown on the page:')
-  log(`\n  ${publicKey}\n`)
-  log(`  ${SIGNING_KEY_PAGE}`)
-  await local.open(SIGNING_KEY_PAGE)
-  return confirmRegistration(session, publicKey, log)
+  return walkRegistration(session, publicKey, log)
 }
 
 // ---------------------------------------------------------------- the action
 
 export interface CaptureOptions {
-  /** Which credentials to ask for. Defaults to the ones the Target does not
-   *  hold — which is what makes re-running install/upgrade silent once it has
-   *  them. Rotation (#37) is this list, chosen, with `mode: 'rotate'`. */
-  readonly which?: readonly CredentialName[]
-  readonly mode?: UpsertMode
   /** Passed through to the check that follows the restart, so a test does not
    *  spend its timeout in the retry loop. */
   readonly verifyOptions?: Partial<VerifyOptions>
 }
 
 /**
- * The credential step of install/upgrade: capture what is missing, write it
- * into the Target, put a signing key there, and restart the Harness holding it.
+ * The credential step of install/upgrade: capture whatever the Target does not
+ * hold, write it in, put a signing key there, and restart the Harness holding
+ * it. Asking only for what is missing is what makes re-running silent once the
+ * Target has them — and replacing one that is already there is rotation, which
+ * is #37's action and asks first.
  *
  * Returns whether the Target now holds a complete identity.
  */
 export const captureCredentials = async (
   session: CredentialSession,
   log: Log = console.log,
-  { which, mode = 'seed', verifyOptions = {} }: CaptureOptions = {},
+  { verifyOptions = {} }: CaptureOptions = {},
 ): Promise<boolean> => {
   const { profile, connector } = session
 
   const current = await connector.exec(readEnvScript(profile.installDir))
   const existing = current.stdout
-  const wanted = ORDER.filter((name) => (which ?? missing(existing)).includes(name))
+  const wanted = missing(existing)
 
-  log('\n── Credentials ' + '─'.repeat(56))
+  log('\nCredentials')
   log('Held by the Harness and injected into each Run (ADR 0006) — no Project')
   log('carries a copy. Nothing typed here is echoed, stored on this machine, or')
   log('passed as a command argument.')
@@ -293,12 +325,12 @@ export const captureCredentials = async (
     captured[CREDENTIAL_ENV[name]] = await CAPTURE[name](session, log)
   }
 
+  // Seeded, never rotated, for the same reason the install seeds: only the keys
+  // that were empty are being filled, and a write that replaced the rest would
+  // undo an operator's edit on every upgrade.
+  const written = upsertAllEnv(existing, captured, 'seed')
   if (wanted.length > 0) {
-    const content = upsertAllEnv(existing, captured, mode)
-    const written = await connector.exec(writeEnvScript(profile.installDir), { stdin: content })
-    if (written.code !== 0) {
-      throw fail('Writing the environment file', written.code, written.stderr)
-    }
+    await writeTargetEnv(connector, profile.installDir, written)
     log(
       `\nWrote ${wanted.length} credential${wanted.length === 1 ? '' : 's'} into ` +
         `${profile.installDir}/.env (mode 600). They went over stdin, not in the script.`,
@@ -307,16 +339,21 @@ export const captureCredentials = async (
 
   const email =
     captured[CREDENTIAL_ENV.gitEmail] ?? readEnv(existing, CREDENTIAL_ENV.gitEmail) ?? 'agent'
-  const registered = await ensureSigningKey(session, email, log)
+  const registered = await ensureSigningKey(session, email, existing, log)
 
+  // Only an environment change needs the restart. A key generated just now is
+  // already visible to a running Harness: compose bind-mounts the secrets
+  // directory, and `agentSandbox` checks the file exists per Run rather than at
+  // startup — so a Harness that has its credentials and gained a key does not
+  // need bouncing.
   if (wanted.length > 0) {
     log('\nRestarting the Harness so it holds them…')
     const up = await connector.exec(composeScript(profile.installDir, 'up -d'))
     if (up.code !== 0) throw fail('docker compose up', up.code, up.stderr)
 
-    // The restart is what the checks are for: an upgrade's earlier pass ran
-    // against the previous container, and this one is the Harness that will
-    // actually take a Dispatch.
+    // Checked again, because the earlier pass ran against the container this
+    // one replaced — on an upgrade that is a Harness with the *previous*
+    // credentials, and this is the one that will take a Dispatch.
     log('\nChecking it from here…')
     const checks = await verifyInstall(connector, {
       installDir: profile.installDir,
@@ -326,5 +363,5 @@ export const captureCredentials = async (
     log(formatChecks(checks))
   }
 
-  return missing(upsertAllEnv(existing, captured, mode)).length === 0 && registered
+  return missing(written).length === 0 && registered
 }
