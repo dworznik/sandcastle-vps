@@ -130,6 +130,19 @@ describe('dispatchCheck', () => {
     })
   })
 
+  // curl prints 000 when it got no response at all. Calling that "answered
+  // 000" blames the Target for a probe that never reached it.
+  it('distinguishes no answer from a wrong answer', () => {
+    expect(dispatchCheck('\n000')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('never answered'),
+    })
+    expect(dispatchCheck('docker: No such image: sha256:bd51')).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('No such image'),
+    })
+  })
+
   it('reports a Harness that answered nothing', () => {
     expect(dispatchCheck('')).toMatchObject({ ok: false })
   })
@@ -221,6 +234,28 @@ describe('verifyInstall', () => {
       expect.objectContaining({ label: 'loopback only', ok: true }),
       expect.objectContaining({ label: 'Dispatch refuses', ok: true }),
     ])
+  })
+
+  // An upgrade recreates the Harness while the previous one is still
+  // registered, so the sync loop passes immediately and the Dispatch probe
+  // lands on a container that is not listening yet. Observed on a real Target:
+  // harness 1 second old, curl 000, reported as a failed check.
+  it('waits for the Dispatch surface after an upgrade the sync check cannot gate', async () => {
+    let asked = 0
+    const connector = connectorAnswering([
+      ['/v0/gql', apps(synced)],
+      ['/proc/net/tcp', loopbackOnly],
+      [
+        '/dispatch',
+        () => {
+          asked += 1
+          return asked < 3 ? '\n000' : 'body\n400'
+        },
+      ],
+    ])
+    const checks = await verifyInstall(connector, options)
+    expect(asked).toBe(3)
+    expect(checks).toContainEqual(expect.objectContaining({ label: 'Dispatch refuses', ok: true }))
   })
 
   // The Orchestrator syncs on its own schedule, so an install that asked once

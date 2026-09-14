@@ -133,16 +133,34 @@ export const exposureCheck = (listeners: readonly Listener[], harnessPort: numbe
   return { ok: true, label, detail: `${harnessPort} and 8288 are on loopback, and nothing else is` }
 }
 
+/**
+ * curl's `%{http_code}` is `000` when it got no HTTP response at all, and the
+ * probe prints nothing useful when `docker run` itself failed. Neither is an
+ * answer, and reporting them as one ("answered 000") blames the Target for a
+ * probe that never reached it.
+ */
+export const answeredStatus = (output: string): string | undefined => {
+  const last = output.trim().split('\n').at(-1)?.trim()
+  return last !== undefined && /^[1-5][0-9][0-9]$/.test(last) ? last : undefined
+}
+
 export const dispatchCheck = (stdout: string): Check => {
   const label = 'Dispatch refuses'
   const lines = stdout.trim().split('\n')
-  const status = lines.at(-1)?.trim()
-  const body = lines.slice(0, -1).join('\n')
+  const status = answeredStatus(stdout)
+  const body = (status === undefined ? lines : lines.slice(0, -1)).join('\n').trim()
+  if (status === undefined) {
+    return {
+      ok: false,
+      label,
+      detail: `the Dispatch surface never answered${body ? `: ${body}` : ''}`,
+    }
+  }
   if (status !== '400') {
     return {
       ok: false,
       label,
-      detail: `a Dispatch to a Project that does not exist answered ${status || 'nothing'}${body ? `: ${body}` : ''}`,
+      detail: `a Dispatch to a Project that does not exist answered ${status}${body ? `: ${body}` : ''}`,
     }
   }
   return { ok: true, label, detail: '400 for a Project that does not exist' }
@@ -189,7 +207,18 @@ export const verifyInstall = async (
   const listeners = await connector.exec(LISTENERS_SCRIPT)
   const exposure = exposureCheck(parseBothTables(listeners.stdout), harnessPort)
 
-  const dispatch = await connector.exec(dispatchProbeScript(installDir, harnessPort, absentProject))
+  // The sync loop above is not a readiness gate on an upgrade: the previous
+  // Harness's registration is still in the Orchestrator, so it passes on the
+  // first attempt while the new container is still starting. Asking the
+  // Dispatch surface once then raced the restart and reported curl's 000 as
+  // though the Target had answered it. Retry until it answers at all.
+  let dispatch = { code: 1, stdout: '', stderr: '' }
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await sleep(delayMs)
+    dispatch = await connector.exec(dispatchProbeScript(installDir, harnessPort, absentProject))
+    if (answeredStatus(dispatch.stdout) !== undefined) break
+  }
+
   return [sync, exposure, dispatchCheck(dispatch.stdout.trim() || dispatch.stderr.trim())]
 }
 
