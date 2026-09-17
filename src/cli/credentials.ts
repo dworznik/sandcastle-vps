@@ -82,8 +82,8 @@ export const missing = (envContent: string): CredentialName[] =>
  * whole stream produced a token with the banner concatenated onto it — whose
  * first symptom was an authentication failure inside a Run, hours downstream
  * of the cause. Last match wins: instructions that mention a token come before
- * the real one. Ported from the retired host path, which learned this the hard
- * way (`scripts/vps/lib/common.sh`).
+ * the real one. The retired host path learned this the hard way, and the rule
+ * came with it when that path went (#38).
  */
 export const findAgentToken = (text: string): string | undefined =>
   text.match(/sk-ant-[A-Za-z0-9_-]{20,}/gu)?.at(-1)

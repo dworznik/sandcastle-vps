@@ -39,18 +39,6 @@ Re-running upgrades in place. It is idempotent: an existing `.env` value is seed
 
 **Prerequisites.** Your machine needs Node and `ssh`. The Target needs Docker Engine with the compose plugin, and your user in its `docker` group — the preflight names anything that is missing, and needs nothing else installed: it does not require rsync, curl, or iproute2 on either end.
 
-<details>
-<summary>The interim deploy from a checkout</summary>
-
-```bash
-cp deploy.local.example deploy.local   # set SSH_TARGET=user@your-vps
-./scripts/deploy.sh
-```
-
-Superseded by the CLI above and retired by issue #38. It uploads the repo with rsync, seeds `~/.sandcastle-vps/.env`, builds the Harness image and brings both containers up — but it cannot capture credentials, so the stack it leaves cannot execute a Run. It needs `rsync`, `jq`, `curl`, `openssl`, `iproute2` and `git` on the VPS, and `ssh` and `rsync` on yours.
-
-</details>
-
 ### 2. Credentials
 
 The install goes straight on to capturing the agent's identity, because a Harness without it refuses every Run. It asks only for what the Target does not already hold, so an upgrade is silent once they are there.
@@ -78,10 +66,19 @@ A Project that is already Onboarded is not scaffolded over: the wizard says so a
 
 ### 4. Dispatch a Run
 
-On the VPS host:
+The Dispatch surface is published on the Target's loopback and nowhere else — reachability is the access control, so nothing behind it authenticates. `sandcastle-run` is delivered with the stack, under the install directory:
 
 ```bash
-sandcastle-run my-app "Fix the flaky login test" [--branch sandcastle/login-test] [--model claude-opus-4-8]
+~/.sandcastle-vps/scripts/vps/sandcastle-run my-app "Fix the flaky login test" \
+  [--branch sandcastle/login-test] [--model claude-opus-4-8]
+```
+
+It needs `curl` and `jq` on the Target. Nothing else does — install and Onboarding go through the Harness container — so if they aren't there, post to the surface directly instead:
+
+```bash
+curl -sS -X POST http://127.0.0.1:3000/dispatch \
+  -H 'content-type: application/json' \
+  -d '{"project":"my-app","task":"Fix the flaky login test"}'
 ```
 
 Dispatching is non-blocking — the Run is queued by the Orchestrator, not executed in your shell. Commits land on the Task Branch; the Project's HEAD and working tree are never touched. Re-dispatching to the same branch resumes that Task Branch's worktree — that's how you iterate on a task.
