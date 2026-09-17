@@ -70,8 +70,17 @@ export const signingKeyPath = (installDir: string, envContent = ''): string =>
  * a value, the way preflight reports a missing Docker, because the wizard has
  * something useful to say about it and a non-zero exit would only say "failed".
  */
-export const ensureKeyScript = (keyPath: string, comment: string): string => {
+export const ensureKeyScript = (keyPath: string, comment: string, replace = false): string => {
   const key = shellQuote(keyPath)
+  // Rotation generates unconditionally; otherwise an existing key is the
+  // answer. Written as two shapes of the same script rather than a flag the
+  // script reads, so what runs on the Target says which one it is.
+  const keepExisting = replace
+    ? ''
+    : `if [ -f "$key" ]; then
+  state=kept
+else`
+  const endKeep = replace ? '' : 'fi'
   return `set -eu
 umask 077
 key=${key}
@@ -79,20 +88,27 @@ if ! command -v ssh-keygen > /dev/null 2>&1; then
   printf 'error\\tssh-keygen is not on the Target — install the openssh client on it\\n'
   exit 0
 fi
-if [ -f "$key" ]; then
-  state=kept
-else
+${keepExisting}
   mkdir -p "$(dirname "$key")"
+  # Generated beside the key and moved into place, so there is never a moment
+  # with no key at all and a failed rotation leaves the old one working. The
+  # old private half is replaced rather than kept: a retired signing key that
+  # stays on disk is a credential nobody is watching any more.
+  tmp="$key.new.$$"
+  rm -f "$tmp" "$tmp.pub"
   # -N '' is the passphraseless requirement: nothing is at the Target's
   # terminal to type one when a Run signs a commit. < /dev/null so a stray
   # prompt cannot hang the wizard on a connection with no terminal at all.
-  if ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(comment)} -f "$key" < /dev/null; then
+  if ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(comment)} -f "$tmp" < /dev/null; then
+    mv -f "$tmp" "$key"
+    mv -f "$tmp.pub" "$key.pub"
     state=created
   else
+    rm -f "$tmp" "$tmp.pub"
     printf 'error\\tssh-keygen could not write the key\\n'
     exit 0
   fi
-fi
+${endKeep}
 chmod 600 "$key"
 # stderr is discarded rather than reported: it is multi-line, and one stray
 # newline in it would be read as another field of the key/value protocol.

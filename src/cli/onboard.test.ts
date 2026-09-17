@@ -270,6 +270,8 @@ const fakePrompter = (answers: string[], confirmAnyway = false) => {
     secret: () => Promise.reject(new Error('Onboarding asks for no secret')),
     select: <T>(_q: string, choices: readonly Choice<T>[]) =>
       Promise.resolve(choices[0]?.value as T),
+    multi: <T>(_q: string, choices: readonly Choice<T>[]) =>
+      Promise.resolve(choices.map((choice) => choice.value)),
     confirm: (question, fallback = false) => {
       asked.push(question)
       return Promise.resolve(question.includes('anyway') ? confirmAnyway : fallback)
