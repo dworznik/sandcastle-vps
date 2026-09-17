@@ -72,23 +72,20 @@ export const signingKeyPath = (installDir: string, envContent = ''): string =>
  */
 export const ensureKeyScript = (keyPath: string, comment: string, replace = false): string => {
   const key = shellQuote(keyPath)
-  // Rotation generates unconditionally; otherwise an existing key is the
-  // answer. Written as two shapes of the same script rather than a flag the
-  // script reads, so what runs on the Target says which one it is.
-  const keepExisting = replace
-    ? ''
-    : `if [ -f "$key" ]; then
-  state=kept
-else`
-  const endKeep = replace ? '' : 'fi'
+  // One interpolation, and the script keeps its own shape: splicing half an
+  // `if` in from one ternary and its `fi` from another left the balance of the
+  // two spread across three places, and nothing here is checked by shellcheck.
   return `set -eu
 umask 077
 key=${key}
+replace=${replace ? 'yes' : 'no'}
 if ! command -v ssh-keygen > /dev/null 2>&1; then
   printf 'error\\tssh-keygen is not on the Target — install the openssh client on it\\n'
   exit 0
 fi
-${keepExisting}
+if [ -f "$key" ] && [ "$replace" != yes ]; then
+  state=kept
+else
   mkdir -p "$(dirname "$key")"
   # Generated beside the key and moved into place, so there is never a moment
   # with no key at all and a failed rotation leaves the old one working. The
@@ -108,7 +105,7 @@ ${keepExisting}
     printf 'error\\tssh-keygen could not write the key\\n'
     exit 0
   fi
-${endKeep}
+fi
 chmod 600 "$key"
 # stderr is discarded rather than reported: it is multi-line, and one stray
 # newline in it would be read as another field of the key/value protocol.

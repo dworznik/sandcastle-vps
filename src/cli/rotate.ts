@@ -76,7 +76,7 @@ export const rotateCredentials = async (
   }
 
   const which = picked.filter(isCredential)
-  const replaceSigningKey = picked.length !== which.length
+  const replaceSigningKey = picked.includes('signingKey')
 
   // Asked once, and named, because the old values do not come back: a signing
   // key in particular is gone from the Target the moment the new one lands.

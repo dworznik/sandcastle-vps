@@ -39,9 +39,10 @@ fi`
 }
 
 /** The images the Target's engine holds, so a Project with no image can be
- *  told apart from one whose build never ran. */
-export const imagesScript = (installDir: string): string =>
-  `cd ${shellQuote(installDir)} && docker images --format '{{.Repository}}:{{.Tag}}'`
+ *  told apart from one whose build never ran. No `cd` into the install
+ *  directory: this asks the engine, not a compose project, and `docker images`
+ *  does not read a working directory. */
+export const imagesScript = (): string => `docker images --format '{{.Repository}}:{{.Tag}}'`
 
 export interface ProjectStatus extends RemoteProject {
   readonly imageBuilt: boolean
@@ -52,6 +53,11 @@ export interface StatusReport {
   /** False when the install directory holds no package at all — a Target this
    *  CLI has never installed to, which is a finding rather than a failure. */
   readonly installed: boolean
+  /** Whether the Target answered at all. A Target that cannot be reached and
+   *  one that has nothing installed look identical from the answers alone, and
+   *  only one of them is fixed by running the install. */
+  readonly reachable?: boolean
+  readonly unreachableReason?: string
   readonly targetVersion?: string
   readonly cliVersion: string
   readonly containers: string
@@ -88,10 +94,19 @@ export const gatherStatus = async ({
   const envContent = env.stdout
   const cliVersion = await packageVersion()
 
+  // Both probes answer for a Target that is reachable and bare — one prints an
+  // empty version, the other `cat`s a file that is not there and succeeds
+  // anyway. A *non-zero* exit is the connection itself failing, which is a
+  // different thing to tell the operator than "nothing is installed".
   if (!targetVersion && !envContent.trim()) {
+    const unreachable = version.code !== 0
     return {
       target: profile.name,
       installed: false,
+      reachable: !unreachable,
+      unreachableReason: unreachable
+        ? version.stderr.trim().split('\n').at(-1) || `the check exited ${version.code}`
+        : undefined,
       cliVersion,
       containers: '',
       checks: [],
@@ -106,7 +121,7 @@ export const gatherStatus = async ({
     connector.exec(appsQueryScript(profile.installDir)),
     connector.exec(LISTENERS_SCRIPT),
     connector.exec(projectsScript(profile.installDir, port)),
-    connector.exec(imagesScript(profile.installDir)),
+    connector.exec(imagesScript()),
   ])
 
   const built = new Set(
@@ -147,6 +162,16 @@ export const gatherStatus = async ({
  *  without a Target. */
 export const formatStatus = (report: StatusReport): string => {
   const lines: string[] = ['', `Target ${report.target}`]
+
+  if (report.reachable === false) {
+    return [
+      ...lines,
+      '',
+      `The Target did not answer: ${report.unreachableReason ?? 'the connection failed'}`,
+      'Nothing was read, so nothing below could be reported. This is a connection',
+      'to fix, not an install to run.',
+    ].join('\n')
+  }
 
   if (!report.installed) {
     return [
