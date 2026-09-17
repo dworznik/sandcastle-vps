@@ -65,7 +65,9 @@ gitleaks, configured in `.gitleaks.toml`, which extends the default ruleset rath
 
 What no scanner ships is a rule for Anthropic tokens, the one credential this platform handles by design: `claude setup-token` output, per-Project `.sandcastle/.env` files. `.gitleaks.toml` adds one. Its `{80,}` length threshold is load-bearing — it fires on real token lengths while staying silent on the deliberately short token-shaped fixtures the test suite needs, which is why no allowlist entry exists.
 
-Those fixtures live in `scripts/agent-token.test.ts`, `src/cli/credentials.test.ts` and `src/cli/prompt.test.ts`. Keep any new one under 80 characters and it stays silent on its own. Do not add a file-level ignore to buy the same silence: these files are the single most likely place a real token would later land, and an ignore is exactly what would let it through.
+Those fixtures live in `src/cli/credentials.test.ts`, `src/cli/prompt.test.ts` and `src/cli/rotate.test.ts`. Keep any new one under 80 characters and it stays silent on its own. Do not add a file-level ignore to buy the same silence: these files are the single most likely place a real token would later land, and an ignore is exactly what would let it through.
+
+This list is duplicated in the comment in `.gitleaks.toml` only by reference — that file points here rather than restating it, so there is one place to update when a fixture moves.
 
 ### Dependencies
 
