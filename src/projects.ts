@@ -1,4 +1,5 @@
-import { access } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
+import { access, readdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { defaultImageName } from '@ai-hero/sandcastle/sandboxes/docker'
 
@@ -11,6 +12,13 @@ export interface Project {
   readonly imageName: string
 }
 
+/** A checkout under the workspace root, Onboarded or not. `resolveProject`
+ *  answers for one and refuses the rest; this answers for all of them, which
+ *  is what a report about a Target needs. */
+export interface ProjectSummary extends Project {
+  readonly onboarded: boolean
+}
+
 const exists = async (path: string): Promise<boolean> => {
   try {
     await access(path)
@@ -18,6 +26,43 @@ const exists = async (path: string): Promise<boolean> => {
   } catch {
     return false
   }
+}
+
+/**
+ * Every checkout under the workspace root, in name order, with whether it has
+ * been Onboarded.
+ *
+ * Answers rather than throws for a workspace root that is empty or absent: an
+ * install writes that root before any Project exists, and this is read by a
+ * status report, where "nothing here yet" is a finding and not a failure.
+ */
+export const listProjects = async (workspaceRoot: string): Promise<ProjectSummary[]> => {
+  let entries: Dirent[]
+  try {
+    entries = await readdir(workspaceRoot, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const found = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const path = join(workspaceRoot, entry.name)
+        // A directory that is not a checkout is something the operator put
+        // there. Listing it as a Project would invite a Dispatch that fails
+        // for a different reason than the list implied.
+        if (!(await exists(join(path, '.git')))) return undefined
+        return {
+          name: entry.name,
+          path,
+          imageName: defaultImageName(path),
+          onboarded: await exists(join(path, '.sandcastle')),
+        }
+      }),
+  )
+  return found
+    .filter((project): project is ProjectSummary => project !== undefined)
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 /**
@@ -39,7 +84,7 @@ export const resolveProject = async (workspaceRoot: string, name: string): Promi
   if (!(await exists(join(path, '.sandcastle')))) {
     throw new Error(
       `Project "${name}" has not been Onboarded: ${path} has no .sandcastle/ directory. ` +
-        `Onboard it first with: init-project ${name}`,
+        `Onboard it with "Add a Project" in the creator CLI.`,
     )
   }
   return { name, path, imageName: defaultImageName(path) }
