@@ -12,7 +12,7 @@ import type { Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
 import { ensureKeyScript, parseSigningKey, signingKeyPath } from './signing-key.js'
 import { readEnv, upsertAllEnv } from './target-env.js'
-import { formatChecks, verifyInstall, type VerifyOptions } from './verify.js'
+import { formatChecks, verifyInstall, type Check, type VerifyOptions } from './verify.js'
 
 /**
  * Capturing the agent's identity on the operator's machine and writing it into
@@ -292,19 +292,35 @@ export interface CaptureOptions {
 }
 
 /**
+ * What the Target looks like afterwards. Three answers rather than one,
+ * because they fail for different reasons and the operator's next move differs
+ * for each: a credential that was not captured is re-run to finish, an
+ * unregistered key is a web page to revisit, and a Harness that stopped
+ * answering is a container log to read.
+ */
+export interface CaptureResult {
+  /** Whether the Target now holds every credential a Run needs. */
+  readonly complete: boolean
+  /** Whether GitHub has the signing key, for signing. */
+  readonly registered: boolean
+  /** The checks run against the restarted Harness — empty when nothing
+   *  changed, so nothing was restarted and the install's own pass still
+   *  stands. */
+  readonly checks: readonly Check[]
+}
+
+/**
  * The credential step of install/upgrade: capture whatever the Target does not
  * hold, write it in, put a signing key there, and restart the Harness holding
  * it. Asking only for what is missing is what makes re-running silent once the
  * Target has them — and replacing one that is already there is rotation, which
  * is #37's action and asks first.
- *
- * Returns whether the Target now holds a complete identity.
  */
 export const captureCredentials = async (
   session: CredentialSession,
   log: Log = console.log,
   { verifyOptions = {} }: CaptureOptions = {},
-): Promise<boolean> => {
+): Promise<CaptureResult> => {
   const { profile, connector } = session
 
   const current = await connector.exec(readEnvScript(profile.installDir))
@@ -313,8 +329,8 @@ export const captureCredentials = async (
 
   log('\nCredentials')
   log('Held by the Harness and injected into each Run (ADR 0006) — no Project')
-  log('carries a copy. Nothing typed here is echoed, stored on this machine, or')
-  log('passed as a command argument.')
+  log('carries a copy. The two tokens are never echoed; nothing asked for here is')
+  log('stored on this machine or passed as a command argument.')
 
   if (wanted.length === 0) {
     log('\nThe Target already holds all of them. Nothing to capture.')
@@ -346,6 +362,7 @@ export const captureCredentials = async (
   // directory, and `agentSandbox` checks the file exists per Run rather than at
   // startup — so a Harness that has its credentials and gained a key does not
   // need bouncing.
+  let checks: readonly Check[] = []
   if (wanted.length > 0) {
     log('\nRestarting the Harness so it holds them…')
     const up = await connector.exec(composeScript(profile.installDir, 'up -d'))
@@ -353,9 +370,11 @@ export const captureCredentials = async (
 
     // Checked again, because the earlier pass ran against the container this
     // one replaced — on an upgrade that is a Harness with the *previous*
-    // credentials, and this is the one that will take a Dispatch.
+    // credentials, and this is the one that will take a Dispatch. Returned
+    // rather than only logged: a Harness that came back wrong is not a Target
+    // to send the operator off to add a Project to.
     log('\nChecking it from here…')
-    const checks = await verifyInstall(connector, {
+    checks = await verifyInstall(connector, {
       installDir: profile.installDir,
       harnessPort: harnessPort(existing),
       ...verifyOptions,
@@ -363,5 +382,5 @@ export const captureCredentials = async (
     log(formatChecks(checks))
   }
 
-  return missing(written).length === 0 && registered
+  return { complete: missing(written).length === 0, registered, checks }
 }

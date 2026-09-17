@@ -60,7 +60,7 @@ The install goes straight on to capturing the agent's identity, because a Harnes
 - **Author name and email** — defaulting to your own `git config`. The address has to be one GitHub has verified on your account, or commits arrive unattributed.
 - **Signing key** — a passphraseless ed25519 key generated _on the Target_, so the private half never travels. Its public half is printed, GitHub's key page is opened, and the registration is confirmed through `gh api user/ssh_signing_keys` rather than by taking your word for it. Register it as a **signing** key: the same page adds authentication keys, and one of those signs nothing.
 
-Nothing you type is echoed, stored on your machine, or passed as a command argument on either end — the environment file travels to the Target over stdin, and the GitHub check puts the token in a header rather than on a `curl` command line. The Target profile holds paths and a host, and never a secret.
+The two tokens are never echoed — not to the terminal, and not into readline's history, where the next prompt's up-arrow would have found them. Nothing asked for here is stored on your machine or passed as a command argument on either end: the environment file travels to the Target over stdin, and the GitHub check puts the token in a header rather than on a `curl` command line. The Target profile holds paths and a host, and never a secret.
 
 The two GitHub pages are the only steps performed by hand. Replacing a credential that is already there is rotation, which is issue #37; re-running install/upgrade fills in whatever is still missing.
 

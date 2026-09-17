@@ -83,14 +83,26 @@ export const createPrompter = (
   })
 
   const ask = async (query: string, hidden = false): Promise<string> => {
-    output.write(query)
     muted = hidden
     try {
+      // On a terminal, a secret is only ever the line typed *after* the
+      // question. Anything already buffered arrived while an ordinary question
+      // was on screen, so readline echoed it as it was typed — taking it as the
+      // answer here would mean accepting a token that is already in the
+      // scrollback, silently, as though it had been hidden. A mis-paste is
+      // dropped instead, and said so: this is a credential, and guessing which
+      // stray line was meant to be it is not a favour.
+      if (hidden && input.isTTY && pending.length > 0) {
+        pending.length = 0
+        say('  (discarding what was typed ahead — a secret is only read after it is asked for)')
+      }
+      output.write(query)
       const buffered = pending.shift()
       if (buffered !== undefined) {
         // Echo it: a piped answer never appeared on the terminal by itself, and
         // a transcript with questions and no answers is unreadable. A piped
-        // secret is the one answer that stays off it anyway.
+        // secret is the one answer that stays off it anyway — nothing echoed it
+        // on the way in, which is why the terminal case above is different.
         if (!input.isTTY && !hidden) say(buffered)
         return buffered.trim()
       }

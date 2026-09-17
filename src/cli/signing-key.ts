@@ -43,13 +43,28 @@ export const signingKeyPath = (installDir: string, envContent = ''): string =>
   `${readEnv(envContent, 'SECRETS_DIR') ?? secretsDir(installDir)}/${KEY_FILE}`
 
 /**
- * Generate the key if it is not there, and report the public half either way.
+ * Generate the key if it is not there, prove it is usable, and report the
+ * public half either way.
  *
  * Idempotent on purpose: an upgrade re-runs credential capture, and a second
  * install that quietly replaced the key would invalidate the registration the
  * operator made on GitHub and leave every later Run signing with a key the
  * account does not know. Replacing it is rotation, which is #37's action and
  * asks first.
+ *
+ * But "there is a file there" is not the same as "a Run can sign with it", and
+ * the gap between those two is only visible hours later, as a pushed commit
+ * GitHub shows as unverified. So the public half is *derived* from the private
+ * key rather than read from `<key>.pub`, which settles three things at once:
+ *
+ * - It proves the two halves belong together. A `.pub` left behind by a
+ *   different key would otherwise be the one registered on GitHub while Runs
+ *   signed with something else.
+ * - It fails, rather than prompting, when the key has a passphrase — there is
+ *   nothing at the Target's terminal to type one, on this Connector or any
+ *   other (docs/connectors.md), so an encrypted key is not a key this can use.
+ * - It names the algorithm, so a key that is not ed25519 is caught here rather
+ *   than by `ssh-keygen -Y sign` inside a Run.
  *
  * Nothing here is fatal to the script — a missing `ssh-keygen` is reported as
  * a value, the way preflight reports a missing Docker, because the wizard has
@@ -65,21 +80,35 @@ if ! command -v ssh-keygen > /dev/null 2>&1; then
   exit 0
 fi
 if [ -f "$key" ]; then
-  printf 'state\\tkept\\n'
+  state=kept
 else
   mkdir -p "$(dirname "$key")"
   # -N '' is the passphraseless requirement: nothing is at the Target's
   # terminal to type one when a Run signs a commit. < /dev/null so a stray
   # prompt cannot hang the wizard on a connection with no terminal at all.
   if ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(comment)} -f "$key" < /dev/null; then
-    printf 'state\\tcreated\\n'
+    state=created
   else
     printf 'error\\tssh-keygen could not write the key\\n'
     exit 0
   fi
 fi
 chmod 600 "$key"
-printf 'public\\t%s\\n' "$(cat "$key.pub")"`
+# stderr is discarded rather than reported: it is multi-line, and one stray
+# newline in it would be read as another field of the key/value protocol.
+if ! public="$(ssh-keygen -y -f "$key" < /dev/null 2> /dev/null)"; then
+  printf 'error\\tThe key at %s cannot be read — it has a passphrase, or it is not a private key. A Run cannot sign with it; move it aside and re-run to generate a new one.\\n' "$key"
+  exit 0
+fi
+case "$public" in
+  'ssh-ed25519 '*) ;;
+  *)
+    printf 'error\\tThe key at %s is not an ed25519 key. Move it aside and re-run to generate one.\\n' "$key"
+    exit 0
+    ;;
+esac
+printf 'state\\t%s\\n' "$state"
+printf 'public\\t%s\\n' "$public"`
 }
 
 export interface SigningKey {

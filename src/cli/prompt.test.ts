@@ -124,6 +124,23 @@ describe('createPrompter', () => {
     expect(cli.shown).toContain('vps')
   })
 
+  // A multi-line paste at an ordinary question is echoed line by line as it
+  // arrives, and the surplus lines sit in the buffer. Handing one of those to a
+  // later `secret()` would return a token that is already in the scrollback —
+  // hidden in name only, which is worse than visibly asking for it again.
+  it('does not answer a secret with terminal input that was already echoed', async () => {
+    const cli = harness({ tty: true })
+    const name = cli.prompter.text('Name')
+    cli.type('vps\rsk-ant-oat01-notreal\r')
+    expect(await name).toBe('vps')
+
+    const token = cli.prompter.secret('Paste the token')
+    cli.type('sk-ant-oat01-typedproperly\r')
+    expect(await token).toBe('sk-ant-oat01-typedproperly')
+    cli.prompter.close()
+    expect(cli.shown).toContain('discarding what was typed ahead')
+  })
+
   // Piped input is echoed by the wizard itself, because it never appeared on
   // the terminal by itself — and that echo is exactly what must not happen
   // here. This is a different code path from the typed one above.

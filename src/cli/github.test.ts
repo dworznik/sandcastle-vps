@@ -30,6 +30,23 @@ describe('readTokenCheck', () => {
     expect(readTokenCheck(503, '').detail).toContain('503')
   })
 
+  // Only a classic token carries `x-oauth-scopes`. It does work, so it is not
+  // refused — but it reaches every repository the account can, which is the
+  // opposite of what the fine-grained page asked for, and worth knowing before
+  // it becomes the credential an autonomous agent holds.
+  it('says so when the token is a classic one rather than fine-grained', () => {
+    const answer = readTokenCheck(200, JSON.stringify({ login: 'op' }), 'repo, workflow')
+    expect(answer.ok).toBe(true)
+    expect(answer.detail).toContain('classic token')
+    expect(answer.detail).toContain('repo, workflow')
+  })
+
+  it('says nothing of the sort for a fine-grained token', () => {
+    expect(readTokenCheck(200, JSON.stringify({ login: 'op' }), null).detail).not.toContain(
+      'classic',
+    )
+  })
+
   // Pointing the CLI at something that answers 200 with anything at all would
   // otherwise accept a token that is not a GitHub token.
   it('refuses a 200 that names no account', () => {

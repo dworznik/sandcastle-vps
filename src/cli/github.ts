@@ -45,8 +45,18 @@ export interface Answer {
  * `GET /user`, read as an answer about the token rather than about the
  * account. Each status is a different mistake, and saying which one it was is
  * the difference between fixing it and making another token.
+ *
+ * **What this proves, and what it does not.** A 200 proves the token
+ * authenticates. It does not prove the token may push to a Project's
+ * repository: a fine-grained token's own permissions are not readable through
+ * the API it authenticates, and the only honest check is to ask about a
+ * specific repository — which is not possible here, because no repository has
+ * been named yet. Adding a Project is where one is (#36), and that is where a
+ * permission this missed would surface. So the permission list is printed for
+ * the operator to set, and what is checked here is that the credential is real
+ * and of the kind the instructions asked for.
  */
-export const readTokenCheck = (status: number, body: string): Answer => {
+export const readTokenCheck = (status: number, body: string, scopes?: string | null): Answer => {
   // Every branch below is GitHub answering, however unhelpfully — so the
   // network was fine and the token is what is in question.
   const answered = (ok: boolean, detail: string): Answer => ({ ok, detail, reached: true })
@@ -57,9 +67,23 @@ export const readTokenCheck = (status: number, body: string): Answer => {
     } catch {
       login = undefined
     }
-    return typeof login === 'string' && login
-      ? answered(true, `authenticates as ${login}`)
-      : answered(false, 'GitHub accepted it but named no account — is this a GitHub token?')
+    if (typeof login !== 'string' || !login) {
+      return answered(false, 'GitHub accepted it but named no account — is this a GitHub token?')
+    }
+    // Only a classic token carries `x-oauth-scopes`; a fine-grained one has no
+    // scopes to report. A classic token with `repo` does work, so this is said
+    // rather than refused — but it is account-wide, which is the opposite of
+    // what the page above asked for, and worth knowing before it is the
+    // credential an autonomous agent holds.
+    if (typeof scopes === 'string') {
+      return answered(
+        true,
+        `authenticates as ${login} — but this is a classic token` +
+          `${scopes.trim() ? ` (scopes: ${scopes.trim()})` : ''}, not the fine-grained one asked ` +
+          `for above. It reaches every repository the account can, not only the Projects.`,
+      )
+    }
+    return answered(true, `authenticates as ${login}`)
   }
   if (status === 401) {
     return answered(false, 'GitHub rejected it (401) — expired, revoked, or mistyped')
@@ -99,7 +123,11 @@ export const checkToken = async (
         'user-agent': 'sandcastle-vps',
       },
     })
-    return readTokenCheck(response.status, await response.text())
+    return readTokenCheck(
+      response.status,
+      await response.text(),
+      response.headers.get('x-oauth-scopes'),
+    )
   } catch (error) {
     return {
       ok: false,

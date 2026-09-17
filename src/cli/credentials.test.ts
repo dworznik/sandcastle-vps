@@ -5,6 +5,7 @@ import {
   captureCredentials,
   findAgentToken,
   missing,
+  type CaptureResult,
   type CredentialSession,
 } from './credentials.js'
 import { CREDENTIAL_KEYS } from '../env.js'
@@ -174,16 +175,27 @@ const run = async (
   // was asked before the flow gave up — a scripted prompter running out of
   // answers is how "it asked one question too many" shows up, and throwing
   // would take the evidence with it.
-  let complete: boolean | undefined
+  let result: CaptureResult | undefined
   let failure: unknown
   try {
-    complete = await captureCredentials(session, (line) => lines.push(line), {
+    result = await captureCredentials(session, (line) => lines.push(line), {
       verifyOptions: { attempts: 1, sleep: () => Promise.resolve() },
     })
   } catch (error) {
     failure = error
   }
-  return { complete, failure, ran, asked, invoked, opened, shown: lines.join('\n') }
+  return {
+    result,
+    complete: result?.complete,
+    registered: result?.registered,
+    checks: result?.checks ?? [],
+    failure,
+    ran,
+    asked,
+    invoked,
+    opened,
+    shown: lines.join('\n'),
+  }
 }
 
 /** Everything the flow said or sent anywhere, except the one place a secret
@@ -294,6 +306,27 @@ describe('captureCredentials', () => {
   it('restarts the Harness so it holds them', async () => {
     const { ran } = await run({ scripted: ANSWERS, fetchImpl: acceptsToken })
     expect(ran.some((r) => r.script.includes('docker compose up -d'))).toBe(true)
+  })
+
+  // The fake Target answers nothing to the probes, so every check fails — the
+  // shape of a Harness that did not come back from its restart. Reporting that
+  // as a finished install is how an operator ends up chasing a broken Dispatch
+  // in the next step instead of reading the container's log in this one.
+  it('carries the post-restart checks out, rather than only logging them', async () => {
+    const { checks, complete } = await run({ scripted: ANSWERS, fetchImpl: acceptsToken })
+    expect(checks.length).toBeGreaterThan(0)
+    expect(checks.every((check) => check.ok)).toBe(false)
+    // The credentials themselves did land — the two are answered separately.
+    expect(complete).toBe(true)
+  })
+
+  it('runs no checks when nothing changed, because nothing was restarted', async () => {
+    const { checks } = await run({
+      env: FULL_ENV,
+      scripted: { confirm: [true] },
+      fetchImpl: acceptsToken,
+    })
+    expect(checks).toEqual([])
   })
 
   it('asks nothing when the Target already holds them all', async () => {
@@ -449,7 +482,7 @@ describe('the signing key', () => {
   })
 
   it('says the key is not registered rather than assuming it is', async () => {
-    const { shown, complete } = await run({
+    const { shown, complete, registered } = await run({
       scripted: { ...ANSWERS, confirm: [true, false] },
       local: { present: ['git', 'gh'], signingKeys: '[]' },
       fetchImpl: acceptsToken,
@@ -458,7 +491,11 @@ describe('the signing key', () => {
     // An authentication key registers fine and signs nothing — the likeliest
     // way to reach this branch having done the work.
     expect(shown).toContain('an authentication key does not sign')
-    expect(complete).toBe(false)
+    // The credentials did land; it is the registration that did not. Reported
+    // apart because the operator's next move differs: one is a re-run, the
+    // other is a web page.
+    expect(registered).toBe(false)
+    expect(complete).toBe(true)
   })
 
   it('falls back to asking when gh is not on the dev machine', async () => {

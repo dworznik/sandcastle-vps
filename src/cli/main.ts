@@ -1,8 +1,8 @@
 import { HELP, parseArgs } from './args.js'
 import { CONNECTORS, connectorFor } from './connectors/index.js'
 import type { Connector, Preflight, PreflightCheck } from './connectors/types.js'
-import { captureCredentials } from './credentials.js'
-import { install } from './install.js'
+import { captureCredentials, type CaptureResult } from './credentials.js'
+import { composeScript, install } from './install.js'
 import { localShell, type LocalShell } from './local.js'
 import { packageVersion } from './package.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
@@ -161,13 +161,40 @@ const installUpgrade = async (session: Session): Promise<void> => {
   // and `install` has already printed what to look at instead.
   if (!(await install(session))) return
 
-  const complete = await captureCredentials(session)
-  console.log(
-    complete
-      ? `\nNext: add a Project. ${notBuiltYet('That', 36)}`
-      : '\nThe Harness is short of a working identity — a Run will name what is missing.' +
-          '\nRe-run install/upgrade to finish capturing it.',
-  )
+  console.log(afterCredentials(session.profile, await captureCredentials(session)))
+}
+
+/**
+ * What to say once the credential step is done. Three ways it can fall short
+ * and a different move for each — telling an operator to go and add a Project
+ * to a Target whose Harness stopped answering is how the next half hour gets
+ * spent in the wrong place.
+ */
+export const afterCredentials = (
+  profile: TargetProfile,
+  { complete, registered, checks }: CaptureResult,
+): string => {
+  const failed = checks.filter((check) => !check.ok)
+  if (failed.length > 0) {
+    return (
+      `\nThe Harness restarted with its credentials, but ${failed.length === 1 ? 'a check' : `${failed.length} checks`} did not pass.` +
+      `\nIts log:  ${composeScript(profile.installDir, 'logs --tail 40 harness')}`
+    )
+  }
+  if (!complete) {
+    return (
+      '\nThe Harness is short of a working identity — a Run will name what is missing.' +
+      '\nRe-run install/upgrade to finish capturing it.'
+    )
+  }
+  if (!registered) {
+    return (
+      '\nThe credentials are in place, but the signing key is not registered on GitHub.' +
+      '\nRuns will commit and push; their commits will show as unverified until it is.' +
+      '\nRe-run install/upgrade to finish registering it.'
+    )
+  }
+  return `\nNext: add a Project. ${notBuiltYet('That', 36)}`
 }
 
 const menu = async (session: Session): Promise<void> => {
