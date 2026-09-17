@@ -102,6 +102,8 @@ const fakePrompter = (scripted: Scripted = {}) => {
     },
     select: <T>(_q: string, choices: readonly Choice<T>[]) =>
       Promise.resolve(choices[0]?.value as T),
+    multi: <T>(_q: string, choices: readonly Choice<T>[]) =>
+      Promise.resolve(choices.map((choice) => choice.value)),
     confirm: (question, fallback = false) => {
       asked.push(question)
       return Promise.resolve(confirm.shift() ?? fallback)
