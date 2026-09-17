@@ -351,9 +351,8 @@ export const captureCredentials = async (
 
   const current = await connector.exec(readEnvScript(profile.installDir))
   const existing = current.stdout
-  // Ordered by CAPTURE_ORDER whatever order the caller listed them in: the
-  // signing key's comment is the agent's email, so the identity has to be
-  // captured before the key is generated.
+  // Ordered by CAPTURE_ORDER whatever order the caller listed them in — see
+  // the note on that constant for why the order matters.
   const asked = which ?? missing(existing)
   const wanted = CAPTURE_ORDER.filter((name) => asked.includes(name))
 

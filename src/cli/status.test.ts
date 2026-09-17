@@ -167,7 +167,27 @@ describe('gatherStatus', () => {
   it('says plainly that nothing is installed, rather than failing', async () => {
     const { report } = await gather({ version: '', env: '' })
     expect(report.installed).toBe(false)
+    expect(report.reachable).toBe(true)
     expect(formatStatus(report)).toContain('Nothing is installed here')
+  })
+
+  // A Target that cannot be reached and one with nothing installed answer
+  // identically — both silent. Telling the operator to run the install when
+  // ssh is what is broken sends them at the wrong thing.
+  it('tells an unreachable Target apart from an empty one', async () => {
+    const connector: Connector = {
+      kind: 'ssh',
+      exec: () =>
+        Promise.resolve({ code: 255, stdout: '', stderr: 'ssh: connect to host vps port 22' }),
+      putTar: () => Promise.resolve(),
+      preflight: () => Promise.reject(new Error('not used here')),
+    }
+    const report = await gatherStatus({ profile, connector })
+    expect(report.reachable).toBe(false)
+    const said = formatStatus(report)
+    expect(said).toContain('did not answer')
+    expect(said).toContain('connect to host')
+    expect(said).not.toContain('Nothing is installed here')
   })
 })
 
@@ -224,6 +244,6 @@ describe('formatStatus', () => {
 
 describe('imagesScript', () => {
   it('asks the Target engine what it holds', () => {
-    expect(imagesScript(profile.installDir)).toContain('docker images')
+    expect(imagesScript()).toContain('docker images')
   })
 })

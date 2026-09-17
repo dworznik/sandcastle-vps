@@ -171,8 +171,9 @@ describe('rotateCredentials', () => {
   it('regenerates the signing key and waits for the new one to be registered', async () => {
     const { ran, shown, asked } = await run(['signingKey'])
     const keygen = ran.find((step) => step.script.includes('ssh-keygen'))
-    // The replacing shape of the script: no "keep what is there" branch.
-    expect(keygen?.script).not.toContain('state=kept')
+    // The script is told to replace, rather than being sent a different
+    // script — the "keep what is there" branch is present and skipped.
+    expect(keygen?.script).toContain('replace=yes')
     expect(shown).toContain(PUBLIC_KEY)
     expect(shown).toContain('previous key is replaced')
     expect(asked).toContain('  Registered it?')
