@@ -6,13 +6,14 @@ useDefault = true
 
 # Neither gitleaks nor its generic-api-key rule detects Anthropic tokens, which
 # is the one credential this platform handles by design — `claude setup-token`
-# output, per-Project .sandcastle/.env files.
+# output, and the Target's compose .env.
 #
 # The {80,} threshold is load-bearing. It fires on real token lengths while
-# staying silent on the deliberately short token-shaped fixtures in
-# scripts/agent-token.test.ts, so no allowlist entry is needed. Do not add a
-# file-level ignore for that file: it is the single most likely place a real
-# token would later land.
+# staying silent on the deliberately short token-shaped fixtures the tests
+# need, so no allowlist entry is needed. Keep any new fixture under that, and
+# do not buy the same silence with a file-level ignore: the files holding those
+# fixtures are the single most likely place a real token would later land.
+# CLAUDE.md § Secret scanning names which files those are.
 [[rules]]
 id = "anthropic-key"
 description = "Anthropic API key or OAuth token"

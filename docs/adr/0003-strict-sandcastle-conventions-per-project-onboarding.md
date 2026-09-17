@@ -1,6 +1,8 @@
 # Strict sandcastle conventions with per-project onboarding
 
 > **Amended by ADR 0006 (2026-09-06).** Two clauses no longer hold: the Harness runs as a container rather than a host process, and agent credentials are held by the Harness and injected per Run rather than kept in each Project's `.sandcastle/.env`. What stands: a Project is Onboarded with the real `sandcastle init`, owns its Dockerfile and its `sandcastle:<dir-name>` image built with the documented command, and the Harness never restates those conventions.
+>
+> The `init-project` helper named below no longer exists (#38). What it did is now the creator CLI's "Add a Project", run inside the Harness container — still the only sanctioned deviation surface, and still a wrapper around the real `sandcastle init` rather than a separate image lineage.
 
 An earlier design centralized what sandcastle distributes: a shared default sandbox image for all projects, a central `CLAUDE_CODE_OAUTH_TOKEN` injected by the harness, and a containerized harness spawning sibling sandboxes through a mounted Docker socket with path-parity mounts. This is reversed. The harness runs as a plain host process and follows sandcastle's own conventions strictly: a Project is a repo that has been Onboarded via the real `sandcastle init` — its own committed `.sandcastle/` directory, its own `sandcastle:<dir-name>` image built with the documented `sandcastle docker build-image` command, its own `.sandcastle/.env` holding credentials that sandcastle's env resolver reads natively. There is no shared image and no central credential injection; the harness adds orchestration (queueing, concurrency, dispatch) on top, never a parallel configuration model.
 

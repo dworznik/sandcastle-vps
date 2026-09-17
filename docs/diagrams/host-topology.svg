@@ -55,7 +55,7 @@
 <text class="host-s" x="150" y="52">dev machine · OrbStack</text>
 
 <g class="node"><rect x="40" y="70" width="150" height="46" rx="4"/><text class="t" x="52" y="89">claude setup-token</text><text class="s" x="52" y="105">mints the Claude token</text></g>
-<g class="node"><rect x="210" y="70" width="170" height="46" rx="4"/><text class="t" x="222" y="89">scripts/deploy.sh</text><text class="s" x="222" y="105">rsync + ssh, no root</text></g>
+<g class="node"><rect x="210" y="70" width="170" height="46" rx="4"/><text class="t" x="222" y="89">creator CLI</text><text class="s" x="222" y="105">ships itself over ssh</text></g>
 <g class="node"><rect x="400" y="70" width="210" height="46" rx="4"/><text class="t" x="412" y="89">browser → :8288</text><text class="s" x="412" y="105">via ssh -L 8288:127.0.0.1:8288</text></g>
 
 <!-- OrbStack machine -->

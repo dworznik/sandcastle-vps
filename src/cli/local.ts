@@ -30,8 +30,8 @@ export interface LocalShell {
    *
    * `claude setup-token` is a conversation — it prints a URL, waits for the
    * browser, and prints the token at the end. Its prompts go to stderr and the
-   * terminal it inherits; the token goes to stdout, which is why the retired
-   * host path could write `claude setup-token | init-project`.
+   * terminal it inherits; the token goes to stdout, which is what makes it
+   * readable at all without asking the operator to copy it out.
    */
   interactive(command: string, args: readonly string[]): Promise<ExecResult>
   /** Show the operator a page. Best-effort by design: a dev machine reached
