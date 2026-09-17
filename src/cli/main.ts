@@ -210,7 +210,15 @@ const menu = async (session: Session): Promise<void> => {
     ])
     if (action === 'quit') return
     if (action === 'install') await installUpgrade(session)
-    if (action === 'project') await addProject(session)
+    if (action === 'project') {
+      const added = await addProject(session)
+      // An Onboarded Project with no image is not a finished one, and saying
+      // nothing would call it done. Not a throw: a Run builds a missing image
+      // itself, so this is a caveat rather than a failure.
+      if (added && !added.imageBuilt) {
+        console.log(`\n${added.name} is Onboarded, but its image is not built.`)
+      }
+    }
     if (action === 'rotate') {
       // Capture and rotation are the same walk over the same questions, and
       // differ only in which of them are asked and whether an existing value
