@@ -1,5 +1,6 @@
 import type { Connector } from './connectors/types.js'
 import { composeScript, fail, harnessPort, readEnvScript } from './install.js'
+import { parseProbe } from './preflight.js'
 import type { Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
 import { shellQuote } from './shell.js'
@@ -37,7 +38,14 @@ export const repoUrl = (input: string): string => {
   if (!trimmed) throw new Error('No repository given.')
   const ssh = /^git@([^:]+):(.+?)(?:\.git)?$/u.exec(trimmed)
   if (ssh) return `https://${ssh[1]}/${ssh[2]}.git`
-  if (/^https?:\/\//u.test(trimmed)) return trimmed
+  if (trimmed.startsWith('http://')) {
+    // The clone sends the PAT to this host. Over plain HTTP that is a token in
+    // cleartext on the wire, which is a worse outcome than refusing to start.
+    throw new Error(
+      `Refusing to clone over plain HTTP — the token would travel in the clear:\n${trimmed}`,
+    )
+  }
+  if (trimmed.startsWith('https://')) return trimmed
   if (/^[\w.-]+\/[\w.-]+$/u.test(trimmed)) return `https://github.com/${trimmed}.git`
   throw new Error(
     `Not a repository this recognises: ${trimmed}\n` +
@@ -58,7 +66,9 @@ export const projectNameFor = (input: string): string => {
 /** The same rule `resolveProject` applies on the Harness side. A name that
  *  cannot be resolved there is a name that cannot be Onboarded here. */
 export const validateProjectName = (name: string): string => {
-  if (!/^[\w.-]+$/u.test(name) || name === '.' || name === '..') {
+  // No leading dash: `git clone <url> -foo` reads that as an option, whatever
+  // the shell quoting around it did.
+  if (!/^[\w.][\w.-]*$/u.test(name) || name === '.' || name === '..') {
     throw new Error(
       `Invalid Project name: ${name}\n` +
         'It is a directory under the workspace root, so it can only be a plain name.',
@@ -86,6 +96,23 @@ export const inHarness = (installDir: string): string =>
 export const projectsScript = (installDir: string, port: number): string =>
   onTargetLoopback(installDir, `curl -sS -m 10 http://127.0.0.1:${port}/projects`)
 
+/** The same question about one Project. Its answer comes from the same
+ *  `resolveProject` a Dispatch calls, and a 404 carries the Harness's own
+ *  reason — which is a better thing to print than "it was not in the list". */
+export const projectScript = (installDir: string, port: number, name: string): string =>
+  onTargetLoopback(
+    installDir,
+    `curl -sS -m 10 http://127.0.0.1:${port}/projects/${encodeURIComponent(name)}`,
+  )
+
+/** The command that retries only the image build, for an operator whose
+ *  Project is Onboarded and whose Dockerfile needs a fix. */
+export const buildRetryCommand = (installDir: string, name: string): string =>
+  composeScript(
+    installDir,
+    `exec harness bash -lc ${shellQuote(`cd "$WORKSPACE_ROOT"/${name} && ${SANDCASTLE} docker build-image`)}`,
+  )
+
 export interface RemoteProject {
   readonly name: string
   readonly imageName: string
@@ -111,6 +138,23 @@ export const parseProjects = (stdout: string): RemoteProject[] => {
 }
 
 /**
+ * The Harness's answer about one Project: the resolved Project, or the reason
+ * it could not resolve it. Both are answers, which is why neither throws — a
+ * 404 here is the finding, not a failure of the question.
+ */
+export const parseProject = (stdout: string): RemoteProject | { readonly error: string } => {
+  let body: unknown
+  try {
+    body = JSON.parse(stdout)
+  } catch {
+    return { error: stdout.trim().split('\n')[0] || 'it did not answer' }
+  }
+  const named = body as { imageName?: unknown; error?: unknown }
+  if (typeof named?.imageName === 'string') return body as RemoteProject
+  return { error: typeof named?.error === 'string' ? named.error : stdout.trim() }
+}
+
+/**
  * Clone the repository into the workspace root.
  *
  * The PAT reaches git through a one-shot credential helper and nowhere else:
@@ -123,7 +167,15 @@ export const parseProjects = (stdout: string): RemoteProject[] => {
 export const cloneScript = (url: string, name: string): string => `set -eu
 cd "$WORKSPACE_ROOT"
 if [ -e ${shellQuote(name)} ]; then
-  printf 'state\\texists\\n'
+  # There already, but only a checkout can be Onboarded. Scaffolding
+  # .sandcastle/ into a directory that is not a repository produces a Project
+  # every Run then fails on, for a reason nothing here would have explained —
+  # the retired init-project guarded this the same way.
+  if [ -d ${shellQuote(name)}/.git ]; then
+    printf 'state\\texists\\n'
+  else
+    printf 'error\\t%s is already there and is not a git checkout. Move it aside, or pick another name.\\n' ${shellQuote(name)}
+  fi
   exit 0
 fi
 if [ -z "\${GH_TOKEN:-}" ]; then
@@ -194,16 +246,6 @@ export interface OnboardSession {
 
 type Log = (line: string) => void
 
-/** Same `key<TAB>value` wire as preflight and the install's facts probe. */
-const readAnswer = (stdout: string): Record<string, string> => {
-  const answer: Record<string, string> = {}
-  for (const line of stdout.split('\n')) {
-    const tab = line.indexOf('\t')
-    if (tab > 0) answer[line.slice(0, tab)] = line.slice(tab + 1)
-  }
-  return answer
-}
-
 /** Run one step in the Harness container and read its answer, raising whatever
  *  the step reported as wrong. */
 const step = async (
@@ -213,7 +255,7 @@ const step = async (
   what: string,
 ): Promise<Record<string, string>> => {
   const { code, stdout, stderr } = await connector.exec(inHarness(installDir), { stdin: script })
-  const answer = readAnswer(stdout)
+  const answer = parseProbe(stdout)
   if (answer.error) throw new Error(answer.error)
   if (code !== 0) throw fail(what, code, stderr || stdout)
   return answer
@@ -221,9 +263,13 @@ const step = async (
 
 export interface OnboardResult {
   readonly name: string
-  /** Whether the Harness can now resolve it — the only answer that matters,
+  /** Whether the Harness can now resolve it — the answer that matters most,
    *  because it is the one a Dispatch will get. */
   readonly visible: boolean
+  /** Whether its image built. Reported rather than thrown: the Project is
+   *  Onboarded either way, and a Run builds a missing image itself — but a
+   *  wizard that said nothing would be calling a half-finished Project done. */
+  readonly imageBuilt: boolean
 }
 
 /**
@@ -279,35 +325,34 @@ export const addProject = async (
 
   log('\nBuilding the Project’s image. This is the slow part — it bakes in the agent')
   log('and the skill set, and it only happens once per Project.')
-  const built = await connector.exec(composeScript(profile.installDir, 'exec -T harness bash -s'), {
-    stdin: buildScript(name),
-  })
+  // Not through `step`, deliberately: a failed build is the one step here that
+  // must not throw. The Onboarding above it has landed, and the operator needs
+  // the retry printed rather than a stack unwound past it.
+  const built = await connector.exec(inHarness(profile.installDir), { stdin: buildScript(name) })
   if (built.code !== 0) {
-    // Everything above this has landed: `sandcastle init` would now refuse, so
-    // re-running "add a Project" is not the retry. Say what is.
+    // `sandcastle init` would now refuse, so re-running "add a Project" is not
+    // the retry. Say what is.
     log(`\n  The image build failed (exit ${built.code}):`)
     log(`  ${built.stderr.trim().split('\n').at(-1) ?? built.stdout.trim().split('\n').at(-1)}`)
     log(`\n${name} is otherwise Onboarded — do not add it again. Fix its`)
     log('.sandcastle/Dockerfile and retry just the build:')
-    log(
-      `  ${composeScript(profile.installDir, `exec harness bash -lc 'cd "$WORKSPACE_ROOT"/${name} && ${SANDCASTLE} docker build-image'`)}`,
-    )
+    log(`  ${buildRetryCommand(profile.installDir, name)}`)
     log('\nA Run against this Project would also build the image itself if it is missing.')
   }
 
   // The Harness's own answer, over the surface a Dispatch uses — this is what
   // proves the path-parity mount and WORKSPACE_ROOT line up, which nothing
-  // visible on the Target's disk can.
+  // visible on the Target's disk can. Asked by name rather than by listing:
+  // the route answers 404 carrying the Harness's own reason, which is a better
+  // thing to print than "it was not in the list".
   log('\nAsking the Harness what it can see…')
-  const after = await connector.exec(projectsScript(profile.installDir, port))
-  const visible = parseProjects(after.stdout.trim() || after.stderr.trim()).find(
-    (project) => project.name === name && project.onboarded,
-  )
+  const after = await connector.exec(projectScript(profile.installDir, port, name))
+  const resolved = parseProject(after.stdout.trim() || after.stderr.trim())
   log(
-    visible
-      ? `  ${name} resolves, and its image is ${visible.imageName}.`
-      : `  The Harness cannot resolve ${name}. Its log will say why.`,
+    'imageName' in resolved
+      ? `  ${name} resolves, and its image is ${resolved.imageName}.`
+      : `  The Harness cannot resolve ${name}: ${resolved.error}`,
   )
 
-  return { name, visible: visible !== undefined }
+  return { name, visible: 'imageName' in resolved, imageBuilt: built.code === 0 }
 }

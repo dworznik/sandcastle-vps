@@ -45,6 +45,12 @@ describe('repoUrl', () => {
     expect(() => repoUrl('not a repo')).toThrow(/Not a repository/)
     expect(() => repoUrl('  ')).toThrow(/No repository/)
   })
+
+  // The clone sends the PAT to this host. Over plain HTTP that is a token in
+  // cleartext on the wire — a worse outcome than refusing to start.
+  it('refuses plain HTTP, which would put the token on the wire', () => {
+    expect(() => repoUrl('http://github.com/dworznik/todo.git')).toThrow(/in the clear/)
+  })
 })
 
 describe('projectNameFor', () => {
@@ -62,6 +68,13 @@ describe('validateProjectName', () => {
     for (const name of ['../etc', 'a/b', '..', '.', '/abs', '', 'has space']) {
       expect(() => validateProjectName(name)).toThrow(/Invalid Project name/)
     }
+  })
+
+  // `git clone <url> -foo` reads that as an option, whatever the shell quoting
+  // around it did — quoting protects the shell, not the program it runs.
+  it('refuses a leading dash, which git would read as an option', () => {
+    expect(() => validateProjectName('-foo')).toThrow(/Invalid Project name/)
+    expect(() => validateProjectName('--upload-pack=x')).toThrow(/Invalid Project name/)
   })
 
   it('takes the names a repository actually has', () => {
@@ -102,6 +115,14 @@ describe('cloneScript', () => {
 
   it('quotes what it was handed rather than pasting it into a command', () => {
     expect(cloneScript('https://example.com/x.git', "o'brien")).toContain(`'o'\\''brien'`)
+  })
+
+  // A directory that is there but is not a checkout cannot be Onboarded:
+  // scaffolding .sandcastle/ into it produces a Project every Run then fails
+  // on, for a reason nothing here would have explained.
+  it('tells an existing checkout apart from an existing directory', () => {
+    expect(script).toContain('/.git')
+    expect(script).toContain('is not a git checkout')
   })
 })
 
@@ -158,13 +179,24 @@ const fakeConnector = (options: { before?: unknown[]; after?: unknown[]; buildCo
       const ok = (stdout: string, code = 0): Promise<ExecResult> =>
         Promise.resolve({ code, stdout, stderr: '' })
       if (script.includes('/.env')) return ok('WORKSPACE_ROOT=/home/op/work\n')
+      // The list is asked once, before anything is changed; the by-name route
+      // is the final check, and answers 404-shaped when it cannot resolve.
+      if (script.includes('/projects/')) {
+        const after = options.after ?? [
+          { name: 'todo', imageName: 'sandcastle:todo', onboarded: true },
+        ]
+        const found = (after as { name?: string }[]).find((p) => p.name === 'todo')
+        return ok(
+          found
+            ? JSON.stringify(found)
+            : JSON.stringify({ error: 'Project "todo" has not been Onboarded' }),
+        )
+      }
       if (script.includes('/projects')) {
         listed += 1
         return ok(
           projectsBody(
-            (listed === 1 ? options.before : options.after) ?? [
-              { name: 'todo', imageName: 'sandcastle:todo', onboarded: true },
-            ],
+            options.before ?? [{ name: 'todo', imageName: 'sandcastle:todo', onboarded: true }],
           ),
         )
       }
@@ -220,7 +252,7 @@ describe('addProject', () => {
   it('clones, Onboards, builds, and confirms the Harness can resolve it', async () => {
     const { result, ran, failure } = await run(ANSWERS, { before: [] })
     expect(failure).toBeUndefined()
-    expect(result).toEqual({ name: 'todo', visible: true })
+    expect(result).toEqual({ name: 'todo', visible: true, imageBuilt: true })
 
     const stdins = ran.map((step) => step.stdin).join('\n')
     expect(stdins).toContain('clone')
@@ -268,7 +300,7 @@ describe('addProject', () => {
   // mount or WORKSPACE_ROOT disagree, which is the failure this catches.
   it('reports that the Harness cannot resolve it, rather than claiming success', async () => {
     const { result, shown } = await run(ANSWERS, { before: [], after: [] })
-    expect(result).toEqual({ name: 'todo', visible: false })
+    expect(result?.visible).toBe(false)
     expect(shown).toContain('cannot resolve')
   })
 
@@ -282,6 +314,15 @@ describe('addProject', () => {
     // Still reports what the Harness sees: a Project with no image is a Run
     // that builds it, not a Project that is broken.
     expect(result?.name).toBe('todo')
+  })
+
+  // The menu reads this: an Onboarded Project with no image is not the same
+  // as a finished one, and saying nothing would call it done. It is not a
+  // throw, because a Run builds a missing image itself.
+  it('reports a failed image build in its result, rather than swallowing it', async () => {
+    const { result } = await run(ANSWERS, { before: [], buildCode: 1 })
+    expect(result?.imageBuilt).toBe(false)
+    expect(result?.visible).toBe(true)
   })
 
   it('never carries a credential of its own', async () => {
