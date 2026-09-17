@@ -6,6 +6,8 @@ import { composeScript, install } from './install.js'
 import { localShell, type LocalShell } from './local.js'
 import { addProject } from './onboard.js'
 import { packageVersion } from './package.js'
+import { rotateCredentials } from './rotate.js'
+import { reportStatus } from './status.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
 import { createPrompter, type Prompter } from './prompt.js'
 import {
@@ -18,7 +20,8 @@ import {
   type TargetProfile,
 } from './profiles.js'
 
-/** What is filed but not built, so a menu entry can say so precisely. */
+/** What is filed but not built, so the wizard can say so precisely. Every menu
+ *  action is built now; what is left are the deferred Connectors. */
 const notBuiltYet = (what: string, issue: number): string =>
   `${what} is not built yet — see issue #${issue}.`
 
@@ -50,7 +53,7 @@ const createTarget = async (prompter: Prompter): Promise<TargetProfile> => {
   )
   if (definition.issue !== undefined) {
     throw new Error(
-      `${definition.label.split(' — ')[0]} is not built yet — see issue #${definition.issue}.`,
+      notBuiltYet(definition.label.split(' — ')[0] ?? definition.kind, definition.issue),
     )
   }
 
@@ -174,6 +177,9 @@ const installUpgrade = async (session: Session): Promise<void> => {
 export const afterCredentials = (
   profile: TargetProfile,
   { complete, registered, checks }: CaptureResult,
+  /** What to say when none of the three went wrong. Differs by caller: an
+   *  install has a next step to point at, a rotation has finished. */
+  whenGood = '\nNext: add a Project, from the menu.',
 ): string => {
   const failed = checks.filter((check) => !check.ok)
   if (failed.length > 0) {
@@ -195,7 +201,7 @@ export const afterCredentials = (
       '\nRe-run install/upgrade to finish registering it.'
     )
   }
-  return '\nNext: add a Project, from the menu.'
+  return whenGood
 }
 
 const menu = async (session: Session): Promise<void> => {
@@ -220,16 +226,16 @@ const menu = async (session: Session): Promise<void> => {
       }
     }
     if (action === 'rotate') {
-      // Capture and rotation are the same walk over the same questions, and
-      // differ only in which of them are asked and whether an existing value
-      // is overwritten. Install/upgrade already asks for whatever is missing;
-      // what is left for #37 is choosing a subset and replacing what is there.
-      console.log(
-        `\n${notBuiltYet('Choosing which credentials to replace', 37)}\n` +
-          'Install / upgrade captures whichever the Target does not hold yet.',
-      )
+      // The same closing report the install gives. Rotation needs it more, not
+      // less: it is the case where the old signing key is already destroyed,
+      // so an unregistered new one means every Run's commits push unverified
+      // until the operator goes back to the page.
+      const rotated = await rotateCredentials(session)
+      if (rotated) {
+        console.log(afterCredentials(profile, rotated, '\nThe Target holds the new credentials.'))
+      }
     }
-    if (action === 'status') console.log(`\n${notBuiltYet('Status', 37)}`)
+    if (action === 'status') await reportStatus(session)
   }
 }
 

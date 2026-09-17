@@ -11,7 +11,7 @@ import type { LocalShell } from './local.js'
 import type { Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
 import { ensureKeyScript, parseSigningKey, signingKeyPath } from './signing-key.js'
-import { readEnv, upsertAllEnv } from './target-env.js'
+import { readEnv, upsertAllEnv, type UpsertMode } from './target-env.js'
 import { formatChecks, verifyInstall, type Check, type VerifyOptions } from './verify.js'
 
 /**
@@ -54,12 +54,20 @@ export type CredentialName = keyof typeof CREDENTIAL_ENV
 
 /** Asked in this order because the signing key's comment is the agent's email,
  *  so the identity has to be known before the key is generated. */
-const CAPTURE_ORDER: readonly CredentialName[] = [
+export const CAPTURE_ORDER: readonly CredentialName[] = [
   'agentToken',
   'githubToken',
   'gitName',
   'gitEmail',
 ]
+
+/** What each one is called when the operator is choosing between them. */
+export const CREDENTIAL_LABEL: Readonly<Record<CredentialName, string>> = {
+  agentToken: 'Claude token',
+  githubToken: 'GitHub token',
+  gitName: 'Author name',
+  gitEmail: 'Author email',
+}
 
 /** Which of them the Target does not hold yet. An empty `KEY=` is what the
  *  environment file scaffolds, and `readEnv` already reads that as absent —
@@ -261,16 +269,24 @@ export const ensureSigningKey = async (
   comment: string,
   envContent: string,
   log: Log,
+  replace = false,
 ): Promise<boolean> => {
   const { profile, connector } = session
   const path = signingKeyPath(profile.installDir, envContent)
-  log('\nCommit signing key')
-  const result = await connector.exec(ensureKeyScript(path, comment))
+  log(replace ? '\nCommit signing key — rotating' : '\nCommit signing key')
+  const result = await connector.exec(ensureKeyScript(path, comment, replace))
   if (result.code !== 0 && result.stdout.trim() === '') {
     throw fail('Generating the signing key', result.code, result.stderr)
   }
   const { publicKey, created } = parseSigningKey(result.stdout)
   log(created ? `  Generated on the Target at ${path}.` : `  Already on the Target at ${path}.`)
+  if (replace) {
+    // The old key is gone from the Target, so the registration GitHub still
+    // holds is for a key nothing will sign with. Until the new one is
+    // registered, a Run's commits push and show as unverified.
+    log('  The previous key is replaced. Its registration on GitHub is now stale —')
+    log('  remove it there once the new one below is in.')
+  }
 
   // A key that was already there is usually a key that was already registered,
   // and every upgrade re-runs this. Ask GitHub before asking the operator:
@@ -286,6 +302,16 @@ export const ensureSigningKey = async (
 // ---------------------------------------------------------------- the action
 
 export interface CaptureOptions {
+  /** Which credentials to ask for. Defaults to the ones the Target does not
+   *  hold, which is what makes re-running install/upgrade silent once it has
+   *  them. Rotation passes this list, chosen, with `mode: 'rotate'`. */
+  readonly which?: readonly CredentialName[]
+  /** `seed` fills what is empty; `rotate` replaces what is there. Capture is
+   *  the first, rotation the second — and they differ in nothing else, which
+   *  is why they are one flow. */
+  readonly mode?: UpsertMode
+  /** Regenerate the signing key rather than keeping the one on the Target. */
+  readonly replaceSigningKey?: boolean
   /** Passed through to the check that follows the restart, so a test does not
    *  spend its timeout in the retry loop. */
   readonly verifyOptions?: Partial<VerifyOptions>
@@ -319,13 +345,17 @@ export interface CaptureResult {
 export const captureCredentials = async (
   session: CredentialSession,
   log: Log = console.log,
-  { verifyOptions = {} }: CaptureOptions = {},
+  { which, mode = 'seed', replaceSigningKey = false, verifyOptions = {} }: CaptureOptions = {},
 ): Promise<CaptureResult> => {
   const { profile, connector } = session
 
   const current = await connector.exec(readEnvScript(profile.installDir))
   const existing = current.stdout
-  const wanted = missing(existing)
+  // Ordered by CAPTURE_ORDER whatever order the caller listed them in: the
+  // signing key's comment is the agent's email, so the identity has to be
+  // captured before the key is generated.
+  const asked = which ?? missing(existing)
+  const wanted = CAPTURE_ORDER.filter((name) => asked.includes(name))
 
   log('\nCredentials')
   log('Held by the Harness and injected into each Run (ADR 0006) — no Project')
@@ -344,7 +374,7 @@ export const captureCredentials = async (
   // Seeded, never rotated, for the same reason the install seeds: only the keys
   // that were empty are being filled, and a write that replaced the rest would
   // undo an operator's edit on every upgrade.
-  const written = upsertAllEnv(existing, captured, 'seed')
+  const written = upsertAllEnv(existing, captured, mode)
   if (wanted.length > 0) {
     await writeTargetEnv(connector, profile.installDir, written)
     log(
@@ -355,7 +385,7 @@ export const captureCredentials = async (
 
   const email =
     captured[CREDENTIAL_ENV.gitEmail] ?? readEnv(existing, CREDENTIAL_ENV.gitEmail) ?? 'agent'
-  const registered = await ensureSigningKey(session, email, existing, log)
+  const registered = await ensureSigningKey(session, email, existing, log, replaceSigningKey)
 
   // Only an environment change needs the restart. A key generated just now is
   // already visible to a running Harness: compose bind-mounts the secrets

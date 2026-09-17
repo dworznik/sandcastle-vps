@@ -155,12 +155,14 @@ describe('ensureKeyScript, against a real ssh-keygen', () => {
 
   it('refuses a key that is not ed25519', async () => {
     const { answer, dir } = await runScript(async (created) => {
+      // ecdsa rather than rsa: it is the same "not ed25519" to the script, and
+      // generates in a fraction of the time an RSA key does.
       await keygen([
         '-q',
         '-t',
-        'rsa',
+        'ecdsa',
         '-b',
-        '2048',
+        '256',
         '-N',
         '',
         '-C',
@@ -178,6 +180,64 @@ describe('ensureKeyScript, against a real ssh-keygen', () => {
     const { stdout } = await exec('stat', ['-c', '%a', join(dir, 'agent_signing_key')])
     expect(stdout.trim()).toBe('600')
     await rm(dir, { recursive: true, force: true })
+  })
+
+  describe('rotating', () => {
+    const rotate = async (dir: string) =>
+      exec('bash', ['-c', ensureKeyScript(join(dir, 'agent_signing_key'), 'rotated', true)], {
+        timeout: 20_000,
+      })
+
+    it('replaces the key it finds, rather than keeping it', async () => {
+      const first = await runScript()
+      const before = parseSigningKey(first.answer).publicKey
+
+      const rotated = parseSigningKey((await rotate(first.dir)).stdout)
+      expect(rotated.created).toBe(true)
+      expect(rotated.publicKey).not.toBe(before)
+      // And the file on disk is the new one, not a leftover alongside it.
+      const derived = (await exec('ssh-keygen', ['-y', '-f', join(first.dir, 'agent_signing_key')]))
+        .stdout
+      expect(rotated.publicKey.split(' ')[1]).toBe(derived.trim().split(' ')[1])
+      await rm(first.dir, { recursive: true, force: true })
+    })
+
+    // Rotation is also the way out of a key this refuses to keep — an
+    // encrypted one, or one of the wrong type. It would be a poor escape
+    // hatch if it inherited the same refusal.
+    it('replaces a key that could not have been kept', async () => {
+      const { dir } = await runScript(async (created) => {
+        await keygen([
+          '-q',
+          '-t',
+          'ed25519',
+          '-N',
+          'encrypted',
+          '-C',
+          'old',
+          '-f',
+          join(created, 'agent_signing_key'),
+        ])
+      })
+      const rotated = parseSigningKey((await rotate(dir)).stdout)
+      expect(rotated.created).toBe(true)
+      expect(rotated.publicKey.startsWith('ssh-ed25519 ')).toBe(true)
+      await rm(dir, { recursive: true, force: true })
+    })
+
+    // Generated beside the key and moved into place: a rotation that failed
+    // partway must leave the Target with the key it had, not with none.
+    it('leaves no temporary key behind', async () => {
+      const { dir } = await runScript()
+      await rotate(dir)
+      const { stdout } = await exec('ls', [dir])
+      expect(stdout).not.toContain('.new.')
+      expect(stdout.split('\n').filter(Boolean).sort()).toEqual([
+        'agent_signing_key',
+        'agent_signing_key.pub',
+      ])
+      await rm(dir, { recursive: true, force: true })
+    })
   })
 })
 

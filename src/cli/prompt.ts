@@ -12,8 +12,31 @@ export interface Prompter {
    *  there is no sensible fallback for a credential. */
   secret(question: string): Promise<string>
   select<T>(question: string, choices: readonly Choice<T>[]): Promise<T>
+  /** Pick any number of them, including none. For rotation, where the
+   *  question is "which of these" rather than "which one". */
+  multi<T>(question: string, choices: readonly Choice<T>[]): Promise<T[]>
   confirm(question: string, fallback?: boolean): Promise<boolean>
   close(): void
+}
+
+/**
+ * Read a choice of several: numbers in any of the ways someone might separate
+ * them, `all` for every one, and an empty line for none.
+ *
+ * Returns `undefined` for anything it cannot read completely, so the caller
+ * re-asks — a partial reading of "1, 4" on a list of three would rotate one
+ * credential while the operator believed they had asked for two.
+ */
+export const readChoices = (answer: string, count: number): number[] | undefined => {
+  const trimmed = answer.trim().toLowerCase()
+  if (!trimmed) return []
+  if (trimmed === 'all') return Array.from({ length: count }, (_, index) => index)
+  const picked = trimmed.split(/[\s,]+/u).filter(Boolean)
+  const indexes = picked.map((one) => Number(one) - 1)
+  if (indexes.some((index) => !Number.isInteger(index) || index < 0 || index >= count)) {
+    return undefined
+  }
+  return [...new Set(indexes)].sort((a, b) => a - b)
 }
 
 type Output = NodeJS.WritableStream & { isTTY?: boolean; columns?: number }
@@ -150,6 +173,19 @@ export const createPrompter = (
     }
   }
 
+  const multi: Prompter['multi'] = async <T>(question: string, choices: readonly Choice<T>[]) => {
+    say(`\n${question}`)
+    choices.forEach((choice, index) => say(`  ${index + 1}) ${choice.label}`))
+    for (;;) {
+      const picked = readChoices(
+        await ask('  > numbers, `all`, or enter for none: '),
+        choices.length,
+      )
+      if (picked) return picked.flatMap((index) => (choices[index] ? [choices[index].value] : []))
+      say(`  Pick numbers between 1 and ${choices.length}, separated by spaces or commas.`)
+    }
+  }
+
   const confirm: Prompter['confirm'] = async (question, fallback = false) => {
     for (;;) {
       const answer = (await ask(`${question} ${fallback ? '[Y/n]' : '[y/N]'} `)).toLowerCase()
@@ -159,5 +195,5 @@ export const createPrompter = (
     }
   }
 
-  return { text, secret, select, confirm, close: () => rl.close() }
+  return { text, secret, select, multi, confirm, close: () => rl.close() }
 }

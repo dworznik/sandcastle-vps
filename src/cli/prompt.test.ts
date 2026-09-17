@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { createPrompter } from './prompt.js'
+import { createPrompter, readChoices } from './prompt.js'
 
 /** A prompter wired to streams a test can drive, the way the CLI wires it to
  *  the terminal. `tty` is what decides whether readline echoes what is typed,
@@ -21,7 +21,62 @@ const harness = ({ tty = false }: { tty?: boolean } = {}) => {
   }
 }
 
+describe('readChoices', () => {
+  it('takes numbers however someone separates them', () => {
+    expect(readChoices('1 3', 4)).toEqual([0, 2])
+    expect(readChoices('1,3', 4)).toEqual([0, 2])
+    expect(readChoices('3, 1', 4)).toEqual([0, 2])
+  })
+
+  it('takes `all` and an empty line as the two ends of the range', () => {
+    expect(readChoices('all', 3)).toEqual([0, 1, 2])
+    expect(readChoices('ALL', 2)).toEqual([0, 1])
+    expect(readChoices('', 3)).toEqual([])
+  })
+
+  it('does not rotate the same credential twice for being named twice', () => {
+    expect(readChoices('2 2 1', 3)).toEqual([0, 1])
+  })
+
+  // Reading "1, 4" on a list of three as "just the first" would rotate one
+  // credential while the operator believed they had asked for two — and
+  // rotation is the action where being quietly partial costs the most.
+  it('refuses a list it cannot read completely, rather than reading part of it', () => {
+    expect(readChoices('1, 4', 3)).toBeUndefined()
+    expect(readChoices('0', 3)).toBeUndefined()
+    expect(readChoices('one', 3)).toBeUndefined()
+    expect(readChoices('1 banana', 3)).toBeUndefined()
+    expect(readChoices('1.5', 3)).toBeUndefined()
+  })
+})
+
 describe('createPrompter', () => {
+  it('collects several answers to one question, and none at all', async () => {
+    const cli = harness()
+    const choices = [
+      { label: 'a', value: 'a' },
+      { label: 'b', value: 'b' },
+      { label: 'c', value: 'c' },
+    ]
+    cli.answer('1 3', '')
+    cli.end()
+    expect(await cli.prompter.multi('Which?', choices)).toEqual(['a', 'c'])
+    expect(await cli.prompter.multi('Which?', choices)).toEqual([])
+    cli.prompter.close()
+  })
+
+  it('re-asks rather than acting on half a list', async () => {
+    const cli = harness()
+    const asked = cli.prompter.multi('Which?', [
+      { label: 'a', value: 'a' },
+      { label: 'b', value: 'b' },
+    ])
+    cli.answer('1 9', '2')
+    expect(await asked).toEqual(['b'])
+    cli.prompter.close()
+    expect(cli.shown).toContain('Pick numbers between 1 and 2')
+  })
+
   it('takes an answer typed after the question', async () => {
     const { prompter, answer } = harness()
     const asked = prompter.text('Name')
