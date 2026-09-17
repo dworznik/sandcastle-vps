@@ -3,15 +3,17 @@ import { describe, expect, it } from 'vitest'
 import { createPrompter } from './prompt.js'
 
 /** A prompter wired to streams a test can drive, the way the CLI wires it to
- *  the terminal. */
-const harness = () => {
-  const input = new PassThrough()
-  const output = new PassThrough()
+ *  the terminal. `tty` is what decides whether readline echoes what is typed,
+ *  so the muting a secret depends on only exists when it is set. */
+const harness = ({ tty = false }: { tty?: boolean } = {}) => {
+  const input = Object.assign(new PassThrough(), { isTTY: tty })
+  const output = Object.assign(new PassThrough(), { isTTY: tty })
   let written = ''
   output.on('data', (chunk: Buffer) => (written += chunk.toString()))
   return {
     prompter: createPrompter(input, output),
     answer: (...lines: string[]) => input.write(lines.map((line) => `${line}\n`).join('')),
+    type: (keys: string) => input.write(keys),
     end: () => input.end(),
     get shown() {
       return written
@@ -74,6 +76,99 @@ describe('createPrompter', () => {
     answer('')
     expect(await no).toBe(false)
     prompter.close()
+  })
+
+  // A secret that reaches the terminal reaches the scrollback, the screen
+  // share, and whatever is recording the session. This is the whole reason
+  // `secret` exists rather than `text` being reused for a token.
+  it('keeps a typed secret off the terminal', async () => {
+    const cli = harness({ tty: true })
+    const asked = cli.prompter.secret('Paste the token')
+    cli.type('sk-ant-oat01-notreal\r')
+    expect(await asked).toBe('sk-ant-oat01-notreal')
+    cli.prompter.close()
+    expect(cli.shown).toContain('Paste the token')
+    expect(cli.shown).not.toContain('sk-ant-oat01-notreal')
+  })
+
+  // Muting only stops the echo. readline also remembers what was typed, and a
+  // remembered secret is one up-arrow away from the screen at the next
+  // question — a worse leak than the echo, because it happens later and to
+  // someone who has stopped thinking about the token.
+  it('does not keep a typed secret where the next prompt can recall it', async () => {
+    const cli = harness({ tty: true })
+    const first = cli.prompter.secret('Paste the token')
+    cli.type('sk-ant-oat01-notreal\r')
+    await first
+    const second = cli.prompter.text('Name')
+    // Up-arrow, then enter. With a history the token would be recalled,
+    // echoed and returned as the answer; without one the line is empty, so
+    // `text` re-asks — which is why a real answer has to follow.
+    cli.type('[A\r')
+    cli.type('vps\r')
+    expect(await second).toBe('vps')
+    cli.prompter.close()
+    expect(cli.shown).not.toContain('sk-ant-oat01-notreal')
+  })
+
+  // The companion to the test above, and the reason it proves anything: the
+  // stream readline echoes to is this module's own, and a mistake in it would
+  // silence every prompt rather than only the secret — passing the muting test
+  // for the wrong reason.
+  it('still echoes a typed ordinary answer', async () => {
+    const cli = harness({ tty: true })
+    const asked = cli.prompter.text('Name')
+    cli.type('vps\r')
+    expect(await asked).toBe('vps')
+    cli.prompter.close()
+    expect(cli.shown).toContain('vps')
+  })
+
+  // A multi-line paste at an ordinary question is echoed line by line as it
+  // arrives, and the surplus lines sit in the buffer. Handing one of those to a
+  // later `secret()` would return a token that is already in the scrollback —
+  // hidden in name only, which is worse than visibly asking for it again.
+  it('does not answer a secret with terminal input that was already echoed', async () => {
+    const cli = harness({ tty: true })
+    const name = cli.prompter.text('Name')
+    cli.type('vps\rsk-ant-oat01-notreal\r')
+    expect(await name).toBe('vps')
+
+    const token = cli.prompter.secret('Paste the token')
+    cli.type('sk-ant-oat01-typedproperly\r')
+    expect(await token).toBe('sk-ant-oat01-typedproperly')
+    cli.prompter.close()
+    expect(cli.shown).toContain('discarding what was typed ahead')
+  })
+
+  // Piped input is echoed by the wizard itself, because it never appeared on
+  // the terminal by itself — and that echo is exactly what must not happen
+  // here. This is a different code path from the typed one above.
+  it('keeps a piped secret off the terminal too', async () => {
+    const cli = harness()
+    cli.answer('sk-ant-oat01-notreal')
+    cli.end()
+    expect(await cli.prompter.secret('Paste the token')).toBe('sk-ant-oat01-notreal')
+    cli.prompter.close()
+    expect(cli.shown).not.toContain('sk-ant-oat01-notreal')
+  })
+
+  it('still echoes an ordinary answer, so a piped session reads as a transcript', async () => {
+    const cli = harness()
+    cli.answer('vps')
+    cli.end()
+    expect(await cli.prompter.text('Name')).toBe('vps')
+    cli.prompter.close()
+    expect(cli.shown).toContain('vps')
+  })
+
+  it('re-asks rather than accepting an empty secret', async () => {
+    const cli = harness()
+    const asked = cli.prompter.secret('Paste the token')
+    cli.answer('', 'sk-ant-oat01-notreal')
+    expect(await asked).toBe('sk-ant-oat01-notreal')
+    cli.prompter.close()
+    expect(cli.shown).toContain('An answer is needed')
   })
 
   // Input that runs out mid-question would otherwise hang the wizard forever.
