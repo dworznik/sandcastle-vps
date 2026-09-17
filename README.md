@@ -66,15 +66,15 @@ The two GitHub pages are the only steps performed by hand. Replacing a credentia
 
 ### 3. Onboard a Project
 
-A checkout can only receive Runs once it's been Onboarded. On the VPS host:
+A checkout can only receive Runs once it's been Onboarded. Pick **Add a Project** from the menu and give it a repository, as `owner/name` or an `https://` URL.
 
-```bash
-claude setup-token | init-project my-app
-```
+Every step runs inside the Harness container, which is the point: it already holds the PAT in its environment, has git and the sandcastle CLI, mounts the workspace root at path parity, and runs as the operator who owns those checkouts. So the token never leaves the Target, and the CLI never handles it.
 
-That scaffolds `.sandcastle/` with the real `sandcastle init`, appends this stack's skill set to the generated Dockerfile, and builds `sandcastle:my-app`. Commit the resulting `.sandcastle/`. Re-running on an Onboarded Project fails rather than overwriting your customizations.
+It clones over HTTPS through a one-shot credential helper — `-c` config, so the token never reaches the checkout's `.git/config`, and the remote stays HTTPS for a Sandbox to push through later. Then it scaffolds `.sandcastle/` with the real `sandcastle init --template blank`, appends this stack's skill set to the generated Dockerfile, and builds `sandcastle:my-app`. Commit the resulting `.sandcastle/`; it carries no credentials.
 
-The token it seeds into `.sandcastle/.env` is no longer read by a Run — credentials are the Harness's now — and both this command and `sync-env` move into the wizard with issues #36 and #38.
+Finally it asks the Harness what it can see. That answer is the one worth having — a checkout is visible on the Target's disk to anyone with a shell there, but only the Harness can say whether the path-parity mount and `WORKSPACE_ROOT` line up well enough for a Dispatch to resolve it.
+
+A Project that is already Onboarded is not scaffolded over: the wizard says so and stops. A checkout you put under the workspace root yourself is Onboarded in place rather than cloned again.
 
 ### 4. Dispatch a Run
 
