@@ -10,7 +10,7 @@ The application this repo produces: a service wrapping the sandcastle library th
 
 ### Run
 
-One invocation of an agent against a Project: a task description goes in, a Task Branch comes out. Executed by sandcastle inside a Sandbox. A Run is requested by a Dispatch and queued by the Orchestrator; it is never executed synchronously in the caller's process.
+One invocation of an agent against a Project: a task description goes in, a delivered Task Branch comes out. Executed by sandcastle inside a Sandbox. A Run is requested by a Dispatch and queued by the Orchestrator; it is never executed synchronously in the caller's process. A Run that completes its work also Delivers it — the two are one unit, and a Run that produced work but did not Deliver it is a failed Run.
 
 ### Dispatch
 
@@ -31,6 +31,14 @@ The one-time act of making a checkout a Project: scaffolding its sandcastle conf
 ### Task Branch
 
 The named git branch where a Run's commits land. Agent work only ever becomes visible as a Task Branch; a Run never modifies a Project's HEAD or working tree. Re-dispatching to an existing Task Branch continues that task.
+
+### Delivery
+
+Publishing a completed Run's Task Branch as a pull request: the branch reaches the Project's remote, and a pull request proposes it against the Run's base. Delivery is what turns agent work into something the Loop's human gate can act on, so it belongs to the Run rather than to a later step. It can succeed or fail independently of the agent's work — a Run whose agent finished and whose Delivery failed has commits and no pull request, which is a failure and must read as one.
+
+### Base
+
+The branch a Run's work is proposed against: what its Task Branch is cut from, and what its Delivery opens the pull request against. A Base is an input to a Run, defaulting to the Project remote's default branch — never inherited from whatever branch the shared checkout happens to be sitting on.
 
 ### Sandbox
 
