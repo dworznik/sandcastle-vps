@@ -256,15 +256,16 @@ Over-asking. The documented status codes are 201 Created, 401 "Requires authenti
 been spammed" ([REST: GitHub Apps][apps-rest]). The docs do not say which of these is
 returned when the request names a repository or permission the installation does not
 have. The one documented failure message is for the complexity cap on scoped tokens:
-"If the complexity limit is exceeded, the application will recieve an error: Too many
-repositories for installation" ([changelog, 2024-02-22][cl-scoped]); the post gives no
+"If the complexity limit is exceeded, the application will recieve [sic] an error: Too
+many repositories for installation" ([changelog, 2024-02-22][cl-scoped]); the post gives no
 status code, and the November 2024 post relaxed part of that cap while noting "The
 limitation on tokens that request a subset of both permissions and tokens remains"
 ([changelog, 2024-11-08][cl-keys]).
 
-Since 27 April 2026 minted tokens are the stateless `ghs_APPID_JWT` form, about 520
-characters with two dots; the endpoint page warns that code expecting 40-character tokens
-"may not handle this new token format correctly" ([REST: GitHub Apps][apps-rest]).
+The 2026-04-24 changelog announced that minted tokens become the stateless `ghs_APPID_JWT`
+form, about 520 characters with two dots ([changelog, 2026-04-24][cl-stateless]); the
+endpoint page warns that code expecting 40-character tokens "may not handle this new token
+format correctly" ([REST: GitHub Apps][apps-rest]).
 
 **Verdict:** A token can be narrowed at mint time to a subset of repositories (up to 500,
 by name or id) and a subset of permissions, never above the installation's grant, lives
@@ -293,7 +294,8 @@ Harness can only revoke a Run's token if it still holds a copy.
 
 ## What this changes in the proposal
 
-Scoring #69's assumptions:
+Scoring #69's assumptions, lettered here for reference since the issue does not number
+them:
 
 - (a) Several concurrent keys: held, 25 at most. Revocation by key deletion: not held as
   stated. The docs do not say deletion invalidates tokens already minted, and they
