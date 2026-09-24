@@ -41,9 +41,7 @@ Locally: `pnpm format`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm lint:s
 
 ### Publishing
 
-`.github/workflows/publish.yml` runs on a pushed `v*` tag. It calls `ci.yml` as a reusable workflow — the same six jobs, not a copy — then `scripts/check-release-tag.sh` refuses a tag whose version is not `package.json`'s or whose commit is not on `main`, and `pnpm publish` runs with `--provenance` and `--skip-manifest-obfuscation`. The latter is load-bearing: pnpm strips `packageManager` from a published manifest by default, and the Harness image build reaches pnpm through corepack, which needs that field.
-
-Authentication is npm trusted publishing (OIDC) with no stored secret. The exception is the first publish of the package, which trusted publishing cannot do because the package does not exist yet: that one uses an `NPM_TOKEN` secret, and the workflow honours it only while it is set. Delete it once the trusted publisher is configured.
+`.github/workflows/publish.yml` runs on a pushed `v*` tag: it calls `ci.yml` as a reusable workflow rather than copying its jobs, runs `scripts/check-release-tag.sh`, and publishes over npm trusted publishing with no stored secret. The reasons behind each flag, and the one-time `NPM_TOKEN` bootstrap for a package that does not exist on npm yet, are comments in that workflow; the operator's view is the README's Releasing section. Keep all three in step.
 
 ### Formatting
 

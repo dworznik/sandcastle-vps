@@ -9,8 +9,8 @@ on:
     branches: [main]
   # Called by publish.yml, so a release runs exactly these checks rather than a
   # copy of them. The github context in a called workflow is the caller's: the
-  # tag push, whose `before` is empty, so the secret scan covers the tagged
-  # commit alone, and the commit conventions job skips itself.
+  # tag push, whose `before` is the null SHA, so the secret scan covers the
+  # tagged commit alone, and the commit conventions job skips itself.
   workflow_call:
 
 # A superseded push to a PR has nothing left to prove.

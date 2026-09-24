@@ -5,12 +5,16 @@
 # is published, so "why did v0.2.0 not publish" is one line in the job log
 # rather than a package on npm that should not be there.
 #
-# Run by .github/workflows/publish.yml; runnable from a checkout too, which is
-# how it is tested.
+# Run by .github/workflows/publish.yml, and from any directory of a checkout
+# by hand, which is how it was exercised: a matching tag on origin/main, a
+# mismatched version, and a commit off main.
 set -euo pipefail
 
 tag="${1:?usage: check-release-tag.sh <tag> [<commit>]}"
 commit="${2:-HEAD}"
+
+# package.json is read relative to the repository root, wherever this runs.
+cd "$(dirname "$0")/.."
 
 version="$(node -p 'require("./package.json").version')"
 if [ "$tag" != "v$version" ]; then

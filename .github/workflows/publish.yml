@@ -11,10 +11,10 @@ permissions:
   contents: read
 
 jobs:
-  # The same checks a pull request gets, by construction rather than by copy:
-  # ci.yml is called, not paraphrased, so the two cannot drift. Its commit
-  # conventions job skips itself here — there is no pull request title to lint
-  # on a tag push.
+  # The checks a pull request gets, by construction rather than by copy: ci.yml
+  # is called, not paraphrased, so the two cannot drift. Five of its six jobs
+  # run; the commit conventions job skips itself, since there is no pull
+  # request title to lint on a tag push.
   checks:
     uses: ./.github/workflows/ci.yml
 
@@ -48,7 +48,9 @@ jobs:
       # --skip-manifest-obfuscation is load-bearing: pnpm strips the
       # packageManager field from a published manifest by default, and the
       # Harness image build on a Target reaches pnpm through corepack, which
-      # reads that field to know which pnpm to run.
+      # reads that field to know which pnpm to run. The flag also keeps the
+      # publish lifecycle scripts, so `prepare` ships too; it exits 0 outside
+      # a git checkout, which a published install always is.
       - name: Publish
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
