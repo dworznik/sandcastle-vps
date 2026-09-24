@@ -19,9 +19,9 @@ MISSING
   fi
 done
 
-# Shebang-based, not glob-based: init-project, sandcastle-run and sync-env
-# carry no .sh extension. shfmt also walks node_modules, which is a few hundred
-# vendored scripts that are none of this repo's business.
+# Shebang-based, not glob-based: sandcastle-run carries no .sh extension.
+# shfmt also walks node_modules, which is a few hundred vendored scripts that
+# are none of this repo's business.
 mapfile -t scripts < <(shfmt -f . | grep -v '^node_modules/')
 
 if [ ${#scripts[@]} -eq 0 ]; then
@@ -29,7 +29,8 @@ if [ ${#scripts[@]} -eq 0 ]; then
   exit 1
 fi
 
-# -x -P SCRIPTDIR so the `source "${here}/lib/…"` lines in the vps commands
-# resolve to the libraries they actually load.
+# -x -P SCRIPTDIR is kept although nothing sources anything any more: the shell
+# helpers went with the host-process deploy (#38), and the flag costs nothing
+# if a script starts sourcing again.
 shellcheck -x -P SCRIPTDIR "${scripts[@]}"
 shfmt -i 2 -ci -sr -d "${scripts[@]}"

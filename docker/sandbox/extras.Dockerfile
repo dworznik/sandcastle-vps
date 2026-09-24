@@ -1,7 +1,10 @@
-# Appended verbatim to a Project's scaffolded .sandcastle/Dockerfile by
-# `init-project`. It is a fragment, not an image: it continues the build stage
-# sandcastle's template starts, and relies on the AGENT_UID/AGENT_GID args that
-# template declares.
+# Appended verbatim to a Project's scaffolded .sandcastle/Dockerfile when it is
+# Onboarded by the creator CLI's "Add a Project". It is a fragment, not an
+# image: it continues the build stage sandcastle's template starts, and relies
+# on the AGENT_UID/AGENT_GID args that template declares.
+#
+# Onboarding runs inside the Harness container, so this file is copied into
+# that image (docker/harness/Dockerfile) as well as shipped in the package.
 #
 # Sandcastle's template already installs git, jq, the GitHub CLI and Claude
 # Code, so the only thing this stack adds on top is the skill set. It is baked

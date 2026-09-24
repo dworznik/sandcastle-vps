@@ -14,7 +14,8 @@
     "compose.yaml",
     ".env.example",
     "tsconfig.json",
-    "pnpm-workspace.yaml"
+    "pnpm-workspace.yaml",
+    "scripts/vps/sandcastle-run"
   ],
   "publishConfig": {
     "access": "public"
