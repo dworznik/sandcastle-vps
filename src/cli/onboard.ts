@@ -105,6 +105,53 @@ export const projectScript = (installDir: string, port: number, name: string): s
     `curl -sS -m 10 http://127.0.0.1:${port}/projects/${encodeURIComponent(name)}`,
   )
 
+/**
+ * `owner/repo` for a GitHub URL, or `undefined` for anywhere else.
+ *
+ * Only GitHub can be asked about the token's permissions, so a repository
+ * hosted elsewhere skips that check rather than failing it.
+ */
+export const repoSlug = (url: string): string | undefined => {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return undefined
+  }
+  if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') return undefined
+  const parts = parsed.pathname
+    .replace(/^\/+/u, '')
+    .replace(/\.git$/u, '')
+    .split('/')
+  return parts.length === 2 && parts[0] && parts[1] ? `${parts[0]}/${parts[1]}` : undefined
+}
+
+/**
+ * Whether the Harness's token may *push* to this repository.
+ *
+ * Cloning proves read access and nothing more — and for a public repository it
+ * proves nothing at all, because git needs no credential to read one. So a
+ * repository outside the token's selected set Onboards cleanly and then fails
+ * at the first `git push`, inside a Run, long after the cause. This asks the
+ * question where a repository is finally named.
+ *
+ * `curl` rather than `gh`: the Harness image carries curl and not the GitHub
+ * CLI. The token is named, never interpolated — same rule as the clone.
+ */
+export const pushAccessScript = (slug: string): string => `set -eu
+if [ -z "\${GH_TOKEN:-}" ]; then
+  printf 'error\\tThe Harness holds no GitHub token. Run install/upgrade first.\\n'
+  exit 0
+fi
+body="$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \\
+  -H 'Accept: application/vnd.github+json' \\
+  https://api.github.com/repos/${shellQuote(slug)} 2> /dev/null | tr -d ' \\n')"
+case "$body" in
+  *'"push":true'*) printf 'push\\ttrue\\n' ;;
+  *'"push":false'*) printf 'push\\tfalse\\n' ;;
+  *) printf 'push\\tunknown\\n' ;;
+esac`
+
 /** The command that retries only the image build, for an operator whose
  *  Project is Onboarded and whose Dockerfile needs a fix. */
 export const buildRetryCommand = (installDir: string, name: string): string =>
@@ -294,6 +341,32 @@ export const addProject = async (
   const name = validateProjectName(
     await prompter.text('Project name (the directory, and the image suffix)', projectNameFor(url)),
   )
+
+  // Before anything is cloned or scaffolded, because the answer can be "do not
+  // bother". A Project the token cannot push to is a Project every Run gets
+  // most of the way through and then fails at the end of.
+  const slug = repoSlug(url)
+  if (slug) {
+    const access = await step(
+      connector,
+      profile.installDir,
+      pushAccessScript(slug),
+      "Checking the token's access",
+    )
+    if (access.push === 'false') {
+      log(`\n  The Harness's token cannot push to ${slug}.`)
+      log('  A Run would clone, work and commit, then fail at push. A fine-grained')
+      log('  token grants the same permissions across every repository it selects,')
+      log(`  so this usually means ${slug} is not in that set — or is public and`)
+      log('  outside it, which reads the same to a clone and differently to a push.')
+      if (!(await prompter.confirm('  Onboard it anyway?'))) {
+        log('\nNothing was changed.')
+        return undefined
+      }
+    } else if (access.push !== 'true') {
+      log(`\n  Could not check whether the token can push to ${slug}. Continuing.`)
+    }
+  }
 
   // Asked before anything is done, because "it is already Onboarded" is a
   // reason to stop rather than a step that fails halfway.

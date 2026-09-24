@@ -6,6 +6,8 @@ import {
   onboardScript,
   parseProjects,
   projectNameFor,
+  pushAccessScript,
+  repoSlug,
   repoUrl,
   validateProjectName,
   type OnboardSession,
@@ -159,6 +161,46 @@ describe('parseProjects', () => {
   })
 })
 
+describe('repoSlug', () => {
+  it('names the repository GitHub can be asked about', () => {
+    expect(repoSlug('https://github.com/dworznik/todo.git')).toBe('dworznik/todo')
+    expect(repoSlug('https://github.com/dworznik/todo')).toBe('dworznik/todo')
+  })
+
+  // Only GitHub can be asked about a token's permissions, so anywhere else
+  // skips the check rather than failing it.
+  it('declines anything that is not a GitHub repository URL', () => {
+    expect(repoSlug('https://gitlab.com/a/b.git')).toBeUndefined()
+    expect(repoSlug('https://github.com/dworznik')).toBeUndefined()
+    expect(repoSlug('https://github.com/a/b/c')).toBeUndefined()
+    expect(repoSlug('not a url')).toBeUndefined()
+  })
+})
+
+describe('pushAccessScript', () => {
+  const script = pushAccessScript('dworznik/todo')
+
+  // Same rule as the clone: the token is named, never carried.
+  it('names the token rather than carrying one', () => {
+    expect(script).toContain('$GH_TOKEN')
+    expect(script).not.toMatch(/gh[ps]_|github_pat_/u)
+  })
+
+  // The Harness image has curl and not the GitHub CLI.
+  it('uses curl, which the Harness image actually has', () => {
+    expect(script).toContain('curl')
+    expect(script).not.toMatch(/\bgh api\b/u)
+  })
+
+  it('puts the token in a header, not on the command line', () => {
+    expect(script).toContain('Authorization: Bearer $GH_TOKEN')
+  })
+
+  it('quotes the repository rather than pasting it into a command', () => {
+    expect(pushAccessScript("o'brien/x")).toContain(`'o'\\''brien/x'`)
+  })
+})
+
 // ------------------------------------------------------------------- the flow
 
 interface Ran {
@@ -168,7 +210,12 @@ interface Ran {
 
 const projectsBody = (projects: unknown[]): string => JSON.stringify({ projects })
 
-const fakeConnector = (options: { before?: unknown[]; after?: unknown[]; buildCode?: number }) => {
+const fakeConnector = (options: {
+  before?: unknown[]
+  after?: unknown[]
+  buildCode?: number
+  push?: string
+}) => {
   const ran: Ran[] = []
   let listed = 0
   const connector: Connector = {
@@ -200,6 +247,7 @@ const fakeConnector = (options: { before?: unknown[]; after?: unknown[]; buildCo
           ),
         )
       }
+      if (stdin.includes('api.github.com/repos')) return ok(`push\t${options.push ?? 'true'}`)
       if (stdin.includes('clone')) return ok('state\tcloned')
       if (stdin.includes('sandcastle init')) return ok('state\tonboarded')
       if (stdin.includes('build-image')) return ok('', options.buildCode ?? 0)
@@ -211,7 +259,7 @@ const fakeConnector = (options: { before?: unknown[]; after?: unknown[]; buildCo
   return { connector, ran }
 }
 
-const fakePrompter = (answers: string[]) => {
+const fakePrompter = (answers: string[], confirmAnyway = false) => {
   const asked: string[] = []
   const queue = [...answers]
   const prompter: Prompter = {
@@ -222,7 +270,10 @@ const fakePrompter = (answers: string[]) => {
     secret: () => Promise.reject(new Error('Onboarding asks for no secret')),
     select: <T>(_q: string, choices: readonly Choice<T>[]) =>
       Promise.resolve(choices[0]?.value as T),
-    confirm: (_q, fallback = false) => Promise.resolve(fallback),
+    confirm: (question, fallback = false) => {
+      asked.push(question)
+      return Promise.resolve(question.includes('anyway') ? confirmAnyway : fallback)
+    },
     close: () => {},
   }
   return { prompter, asked }
@@ -230,10 +281,16 @@ const fakePrompter = (answers: string[]) => {
 
 const run = async (
   answers: string[],
-  options: { before?: unknown[]; after?: unknown[]; buildCode?: number } = {},
+  options: {
+    before?: unknown[]
+    after?: unknown[]
+    buildCode?: number
+    push?: string
+    confirmAnyway?: boolean
+  } = {},
 ) => {
   const { connector, ran } = fakeConnector(options)
-  const { prompter, asked } = fakePrompter(answers)
+  const { prompter, asked } = fakePrompter(answers, options.confirmAnyway ?? false)
   const session: OnboardSession = { profile, connector, prompter }
   const lines: string[] = []
   let result: Awaited<ReturnType<typeof addProject>>
@@ -323,6 +380,37 @@ describe('addProject', () => {
     const { result } = await run(ANSWERS, { before: [], buildCode: 1 })
     expect(result?.imageBuilt).toBe(false)
     expect(result?.visible).toBe(true)
+  })
+
+  // Cloning proves read access, and for a public repo it proves nothing at all.
+  // Onboarding a repo the token cannot push to produces a Project every Run
+  // gets most of the way through and then fails at the end of.
+  it('stops before cloning when the token cannot push', async () => {
+    const { result, ran, shown, asked } = await run(ANSWERS, { before: [], push: 'false' })
+    expect(result).toBeUndefined()
+    expect(shown).toContain('cannot push to dworznik/todo')
+    expect(asked).toContain('  Onboard it anyway?')
+    // Nothing was cloned, scaffolded or built.
+    expect(ran.every((step) => !step.stdin.includes('clone'))).toBe(true)
+    expect(ran.every((step) => !step.stdin.includes('sandcastle init'))).toBe(true)
+  })
+
+  it('goes ahead when told to, since the operator may be about to fix the token', async () => {
+    const { result, ran } = await run(ANSWERS, {
+      before: [],
+      push: 'false',
+      confirmAnyway: true,
+    })
+    expect(result?.visible).toBe(true)
+    expect(ran.some((step) => step.stdin.includes('clone'))).toBe(true)
+  })
+
+  // A repo hosted elsewhere, or an unreachable API, must not block Onboarding
+  // over a question that could not be asked.
+  it('continues when the check could not be answered', async () => {
+    const { result, shown } = await run(ANSWERS, { before: [], push: 'unknown' })
+    expect(result?.visible).toBe(true)
+    expect(shown).toContain('Could not check')
   })
 
   it('never carries a credential of its own', async () => {
