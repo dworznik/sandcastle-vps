@@ -2,7 +2,7 @@
 
 A [sandcastle](https://github.com/mattpocock/sandcastle) harness for the VPS: dispatch background agent Runs against the project checkouts you already work on in [claude-tmux](https://github.com/dworznik/claude-tmux) sessions. A task description goes in; a `sandcastle/<slug>` Task Branch comes out — visible immediately in your live checkout, pushed, and proposed as a pull request.
 
-See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing decisions (branch-only strategy on shared checkouts; Inngest with retries disabled; strict sandcastle conventions with per-project Onboarding; Delivery inside the Run).
+See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing decisions (branch-only strategy on shared checkouts; Inngest with retries disabled; strict sandcastle conventions with per-project Onboarding; Delivery inside the Run; the Run Log kept by the Harness).
 
 ## Architecture
 
@@ -83,6 +83,8 @@ curl -sS -X POST http://127.0.0.1:3000/dispatch \
 
 Dispatching is non-blocking — the Run is queued by the Orchestrator, not executed in your shell. Commits land on the Task Branch; the Project's HEAD and working tree are never touched. Re-dispatching to the same branch resumes that Task Branch's worktree — that's how you iterate on a task.
 
+The answer carries the Orchestrator's id for the Dispatch and, beside it, the URL of the Run's log page — `sandcastle-run` prints it as `Run logs: http://127.0.0.1:3000/runs/<id>`. The page exists from that moment and tails the Run live once it starts; see [Watch it](#5-watch-it).
+
 A Run that completes then **Delivers**: it pushes the Task Branch and opens a pull request against the Run's **Base**, or updates the one that branch already has. The Base is what the branch is cut from as well as what its pull request targets; `--base` names it, and without one the Project remote's default branch is used. A re-dispatch keeps the Base the branch was cut from, and naming a conflicting one is refused rather than rebasing work that may already be under review.
 
 The Run's result says which of four things happened — `delivered`, `updated`, `nothing-to-deliver`, or `skipped` because the Run did not complete — with the pull request URL on the first two and a reason on the last two. A Delivery that cannot be completed fails the Run and names the branch and its commits; a Run that reports success always has a pull request or a reason there is none. See [ADR 0008](docs/adr/0008-delivery-inside-the-run.md).
@@ -95,6 +97,18 @@ SANDCASTLE_DISPATCH_URL=http://127.0.0.1:3000 sandcastle-run my-app "..."
 ```
 
 ### 5. Watch it
+
+Every Run keeps its own log — its **Run Log** — under the Project, at `<project>/.sandcastle/runs/<id>/`, and the Harness serves it on the same loopback port as the Dispatch surface:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 your-vps    # then open http://127.0.0.1:3000/runs/<id>
+```
+
+The page is one timeline: the Harness's phases (Base resolved, image ready, agent started, Delivery), one row per model call with a chip per tool call, the Sandbox's own hook events between them, and a subagent's work indented under the Agent call that spawned it. A summary band counts calls, tool calls and errors, shows the cost, and the subscription's five-hour and seven-day utilisation as Claude Code reports them. It polls every two seconds until the Run reports itself finished or failed, and any row opens to its full event. Behind it, each file is served under the same path: `events.jsonl` (what the page reads), `stream.jsonl` (Claude Code's raw `stream-json`, verbatim), `hooks.jsonl` (written from inside the Sandbox), `sandcastle.log` (sandcastle's own rendered log) and `session/` (the captured session transcript and its subagents' transcripts, which outlive the Harness container because they are here and not in its home).
+
+The same URL is in the Run's result on the Orchestrator's run page — with a capped tail of the last events, and `truncated: true` when it was cut — in a failed Run's error message, and in the pull request body a Delivery writes. The Orchestrator itself records that a Run happened and how it ended; the Run Log is what happened inside it. See [ADR 0009](docs/adr/0009-run-log-kept-by-the-harness-and-linked-from-the-result.md).
+
+The Orchestrator's dashboard has every Run's status and result:
 
 ```bash
 ssh -L 8288:127.0.0.1:8288 your-vps    # then open http://127.0.0.1:8288

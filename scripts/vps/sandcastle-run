@@ -3,7 +3,8 @@
 # Dispatch a sandcastle Run. Keyless: posts to the Harness's /dispatch route on
 # loopback — reachability is the access control, so run this on the VPS host or
 # through an SSH tunnel. Non-blocking: the Run is queued by the Orchestrator;
-# watch progress in the Inngest dashboard or wait for the Task Branch.
+# the run page it prints tails the Run live, and the Inngest dashboard has its
+# status.
 #
 # Usage:
 #   sandcastle-run <project> <task...> [--branch <name>] [--base <name>] [--model <model>]
@@ -86,6 +87,10 @@ for url in "${dispatch_urls[@]}"; do
   case "$status" in
     2*)
       echo "Dispatched to $url: $body"
+      # The run page, on the Harness's own loopback port. Through a tunnel
+      # that maps the same local port it opens as printed; through one that
+      # maps a different port, swap the port.
+      jq -r '.logs[]? | "Run logs: \(.)"' <<< "$body" 2> /dev/null || true
       exit 0
       ;;
     *)

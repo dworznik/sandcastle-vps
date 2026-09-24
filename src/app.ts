@@ -1,3 +1,6 @@
+import { createReadStream } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
@@ -7,6 +10,7 @@ import { env } from './env.js'
 import { sandcastleRun } from './functions/run.js'
 import { inngest, runRequested, runRequestedData } from './inngest.js'
 import { listProjects, resolveProject } from './projects.js'
+import { locateRun, resolveRunFile, runPageUrl, validateRunId } from './run-logs/run-dir.js'
 
 /**
  * The two effects a Dispatch has, injected so the routes can be exercised
@@ -22,15 +26,38 @@ export interface AppDeps {
   readonly resolveProject: (project: string) => Promise<unknown>
   /** Every checkout under the workspace root, Onboarded or not. */
   readonly listProjects: () => Promise<unknown>
+  /** The run directory for an id, under whichever Project holds it. */
+  readonly locateRun: (id: string) => Promise<string | undefined>
+  /** Where the run page for an id is, from the Harness's own port. */
+  readonly runPageUrl: (id: string) => string
 }
 
 const liveDeps: AppDeps = {
   dispatch: (data) => inngest.send(runRequested.create(data)),
   resolveProject: (project) => resolveProject(env.workspaceRoot, project),
   listProjects: () => listProjects(env.workspaceRoot),
+  locateRun: (id) => locateRun(env.workspaceRoot, id),
+  runPageUrl: (id) => runPageUrl(env.port, id),
 }
 
 const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+/** The run page, read once. It ships in `src/` beside this file — a single
+ *  dependency-free HTML file that fetches its Run's `events.jsonl` itself. */
+let runPage: Promise<string> | undefined
+const loadRunPage = (): Promise<string> => {
+  runPage ??= readFile(new URL('./run-logs/page.html', import.meta.url), 'utf8')
+  return runPage
+}
+
+const isRunId = (id: string): boolean => {
+  try {
+    validateRunId(id)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export const createApp = (deps: AppDeps = liveDeps): Hono => {
   const app = new Hono()
@@ -104,7 +131,9 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
         return c.json({ error: detail(error) }, 400)
       }
       const { ids } = await deps.dispatch(data)
-      return c.json({ ids }, 202)
+      // The link, before the Run starts: the run directory is keyed by this
+      // id, so the live tail is one click away from the moment of Dispatch.
+      return c.json({ ids, logs: ids.map((id) => deps.runPageUrl(id)) }, 202)
     },
   )
 
@@ -112,6 +141,48 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
   // Hono would otherwise answer them with a bare 404, which reads as "no such
   // endpoint" rather than "wrong verb".
   app.all('/dispatch', (c) => c.json({ error: 'Use POST' }, 405))
+
+  /**
+   * A Run's directory, by the id its Dispatch answered with. Loopback only,
+   * like everything else here: the tunnel the operator already opens for the
+   * dashboard is the access path, and the Orchestrator's run page links here.
+   *
+   * The page is served for any well-formed id, started or not: the link is
+   * handed out at Dispatch, and a queued Run has no directory yet. The page
+   * tails `events.jsonl` itself and says so until it appears. The files are
+   * served only once they exist, and only the ones a Run writes.
+   */
+  const page = async (c: { readonly req: { param: (name: string) => string } }) => {
+    if (!isRunId(c.req.param('id'))) return undefined
+    return loadRunPage()
+  }
+  app.get('/runs/:id', async (c) => {
+    const html = await page(c)
+    return html === undefined ? c.json({ error: 'Not a run id' }, 404) : c.html(html)
+  })
+  app.get('/runs/:id/*', async (c) => {
+    const id = c.req.param('id')
+    const rest = c.req.path.slice(`/runs/${id}/`.length)
+    if (rest === '') {
+      const html = await page(c)
+      return html === undefined ? c.json({ error: 'Not a run id' }, 404) : c.html(html)
+    }
+    if (!isRunId(id)) return c.json({ error: 'Not a run id' }, 404)
+    const dir = await deps.locateRun(id)
+    if (!dir) return c.json({ error: `No Run ${id}` }, 404)
+    const file = resolveRunFile(dir, rest)
+    if (!file) return c.json({ error: `No such file in Run ${id}` }, 404)
+    try {
+      await stat(file.path)
+    } catch {
+      return c.json({ error: `Run ${id} has not written ${rest}` }, 404)
+    }
+    // Streamed rather than read whole: a transcript or a raw stream can run
+    // to megabytes, and the page fetches the events file every two seconds.
+    c.header('content-type', file.contentType)
+    c.header('cache-control', 'no-store')
+    return c.body(Readable.toWeb(createReadStream(file.path)) as ReadableStream)
+  })
 
   // The Orchestrator's side of the same server: sync, introspection, and the
   // invocation of each Run. It reaches this by service name over the compose

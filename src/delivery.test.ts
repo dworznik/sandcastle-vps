@@ -255,7 +255,7 @@ describe('pullRequestBody', () => {
       runId: '01JRUN',
       project: 'todo',
       target: 'sandcastle-vps',
-      transcript: '/work/todo/.sandcastle/logs/sandcastle-task.log',
+      logs: 'http://127.0.0.1:3000/runs/01JRUN',
     },
   })
 
@@ -267,7 +267,13 @@ describe('pullRequestBody', () => {
     expect(body).toContain('01JRUN')
     expect(body).toContain('todo')
     expect(body).toContain('sandcastle-vps')
-    expect(body).toContain('/work/todo/.sandcastle/logs/sandcastle-task.log')
+    expect(body).toContain('http://127.0.0.1:3000/runs/01JRUN')
+  })
+
+  // A reviewer on their laptop cannot open a loopback URL as it stands; the
+  // body says what it is rather than leaving them to a connection refused.
+  it('says the log is behind a tunnel, so the URL reads as reachable rather than broken', () => {
+    expect(body).toMatch(/loopback.*tunnel/u)
   })
 })
 
@@ -284,7 +290,12 @@ describe('deliver', () => {
     base: 'main',
     commits: ['aaa1111', 'bbb2222'],
     task: 'Add a health route',
-    provenance: { runId: '01JRUN', project: 'todo', target: 'vps', transcript: '/logs/task.log' },
+    provenance: {
+      runId: '01JRUN',
+      project: 'todo',
+      target: 'vps',
+      logs: 'http://127.0.0.1:3000/runs/x',
+    },
   }
 
   /** No waiting in tests; the backoff itself is asserted separately. */

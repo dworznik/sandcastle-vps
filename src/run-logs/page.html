@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Run</title>
+    <!--
+      The run page. Served by the Harness at /runs/<id> and fetches
+      /runs/<id>/events.jsonl itself, polling every two seconds until the Run
+      reports itself finished or failed. One dependency-free file; the fonts
+      are a nicety with a fallback stack, not a requirement.
+    -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f9;
+        --surface: #ffffff;
+        --ink: #1a1f27;
+        --muted: #5d6673;
+        --faint: #8d96a3;
+        --line: #d8dde5;
+        --line-strong: #b9c1cc;
+        --main: #2757c9;
+        --main-soft: #e4ebfa;
+        --sub: #b0590c;
+        --sub-soft: #fbeedd;
+        --hook: #6b7480;
+        --hook-soft: #eceff3;
+        --error: #c23a2f;
+        --error-soft: #fbe5e2;
+        --ok: #2f7d4f;
+        --phase: #4a5563;
+        --font-ui: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
+        --font-data: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+          --bg: #0f1216;
+          --surface: #161a20;
+          --ink: #e7eaef;
+          --muted: #98a2b0;
+          --faint: #6b7583;
+          --line: #262c35;
+          --line-strong: #3a424e;
+          --main: #7aa2ff;
+          --main-soft: #1b2740;
+          --sub: #e8a24a;
+          --sub-soft: #33260f;
+          --hook: #8791a0;
+          --hook-soft: #1d2229;
+          --error: #ff6f62;
+          --error-soft: #3a1c19;
+          --ok: #5fc78a;
+          --phase: #aab3c0;
+        }
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --bg: #0f1216;
+        --surface: #161a20;
+        --ink: #e7eaef;
+        --muted: #98a2b0;
+        --faint: #6b7583;
+        --line: #262c35;
+        --line-strong: #3a424e;
+        --main: #7aa2ff;
+        --main-soft: #1b2740;
+        --sub: #e8a24a;
+        --sub-soft: #33260f;
+        --hook: #8791a0;
+        --hook-soft: #1d2229;
+        --error: #ff6f62;
+        --error-soft: #3a1c19;
+        --ok: #5fc78a;
+        --phase: #aab3c0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--font-ui);
+        font-size: 14px;
+        line-height: 1.45;
+        padding-inline: 20px;
+        padding-block: 0 48px;
+      }
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+      }
+
+      /* Header band */
+      header {
+        padding-block: 22px 16px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 28px;
+        align-items: baseline;
+      }
+      header h1 {
+        font-size: 17px;
+        font-weight: 600;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      header h1 code {
+        font-family: var(--font-data);
+        font-weight: 500;
+        font-size: 15px;
+      }
+      .status {
+        font-size: 12px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        padding: 2px 8px;
+        border-radius: 3px;
+        background: var(--hook-soft);
+        color: var(--muted);
+      }
+      .status.ok {
+        background: var(--main-soft);
+        color: var(--main);
+      }
+      .status.live {
+        background: var(--sub-soft);
+        color: var(--sub);
+      }
+      .status.failed {
+        background: var(--error-soft);
+        color: var(--error);
+      }
+      .meta {
+        font-family: var(--font-data);
+        font-size: 12.5px;
+        color: var(--muted);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 18px;
+      }
+      .meta b {
+        color: var(--ink);
+        font-weight: 500;
+      }
+      .meta a {
+        color: inherit;
+      }
+
+      /* Summary strip */
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .summary > div {
+        padding: 12px 14px 12px 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .summary .k {
+        font-size: 11.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--faint);
+      }
+      .summary .v {
+        font-family: var(--font-data);
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+      }
+      .summary .v small {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      /* Filter bar */
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 18px;
+        padding-block: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        align-items: center;
+      }
+      .filters label {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        cursor: pointer;
+      }
+      .filters input {
+        accent-color: var(--main);
+      }
+      .filters .legend {
+        display: inline-flex;
+        gap: 14px;
+        margin-left: auto;
+        font-family: var(--font-data);
+        font-size: 12px;
+      }
+      .legend i {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        vertical-align: -1px;
+        margin-right: 5px;
+      }
+
+      /* Timeline */
+      .timeline {
+        display: flex;
+        flex-direction: column;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 92px 14px minmax(0, 1fr);
+        gap: 0 10px;
+        align-items: baseline;
+        padding-block: 5px;
+        border-bottom: 1px solid var(--line);
+        min-height: 30px;
+      }
+      .row:focus-visible {
+        outline: 2px solid var(--main);
+        outline-offset: -2px;
+      }
+      .row.hidden {
+        display: none;
+      }
+      .t {
+        font-family: var(--font-data);
+        font-size: 12px;
+        color: var(--faint);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .t .ms {
+        opacity: 0.55;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        align-self: center;
+        background: var(--line-strong);
+      }
+      .row.call .dot {
+        background: var(--main);
+      }
+      .row.call.err .dot {
+        background: var(--error);
+      }
+      .row.sub .dot {
+        background: var(--sub);
+      }
+      .row.hook .dot {
+        width: 6px;
+        height: 6px;
+        margin-inline: 2px;
+        background: var(--hook);
+      }
+      .row.phase .dot {
+        background: transparent;
+        border: 2px solid var(--phase);
+        width: 8px;
+        height: 8px;
+      }
+      .row.sys .dot {
+        background: var(--line);
+        width: 5px;
+        height: 5px;
+        margin-inline: 2.5px;
+      }
+
+      .body {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        align-items: baseline;
+        min-width: 0;
+      }
+      .kind {
+        font-size: 11.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        min-width: 88px;
+      }
+      .row.call .kind {
+        color: var(--main);
+      }
+      .row.sub .kind {
+        color: var(--sub);
+      }
+      .row.err .kind {
+        color: var(--error);
+      }
+      .row.phase .kind {
+        color: var(--phase);
+      }
+      .n {
+        font-family: var(--font-data);
+        font-size: 12px;
+        color: var(--faint);
+      }
+      .text {
+        color: var(--ink);
+      }
+      .row.hook .text,
+      .row.sys .text {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .row.phase .text {
+        font-weight: 500;
+      }
+      .chip {
+        font-family: var(--font-data);
+        font-size: 12px;
+        padding: 1px 7px;
+        border-radius: 3px;
+        background: var(--main-soft);
+        color: var(--main);
+        white-space: nowrap;
+      }
+      .chip.err {
+        background: var(--error-soft);
+        color: var(--error);
+      }
+      .chip.sub {
+        background: var(--sub-soft);
+        color: var(--sub);
+      }
+      .chip.hook {
+        background: var(--hook-soft);
+        color: var(--hook);
+      }
+      .id {
+        font-family: var(--font-data);
+        font-size: 11.5px;
+        color: var(--faint);
+      }
+      .arg {
+        font-family: var(--font-data);
+        font-size: 12px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+      }
+
+      /* Nesting under an Agent call */
+      .row.nested {
+        position: relative;
+      }
+      .row.nested .body {
+        padding-left: 22px;
+        border-left: 2px solid var(--sub);
+      }
+      .row.nested.hook .body {
+        border-left-color: var(--sub-soft);
+      }
+
+      /* Progress rows fold into their subagent's start row */
+      .expander {
+        font: inherit;
+        font-family: var(--font-data);
+        font-size: 11.5px;
+        color: var(--sub);
+        background: var(--sub-soft);
+        border: 0;
+        border-radius: 3px;
+        padding: 1px 7px;
+        cursor: pointer;
+      }
+      .expander::before {
+        content: '▸ ';
+      }
+      .expander.expanded::before {
+        content: '▾ ';
+      }
+
+      /* Raw event on click */
+      .row.call,
+      .row.sub,
+      .row.hook,
+      .row.phase {
+        cursor: pointer;
+      }
+      .raw {
+        display: none;
+        grid-column: 3;
+        margin-top: 4px;
+        padding: 8px 10px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        font-family: var(--font-data);
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: var(--muted);
+        overflow-x: auto;
+        white-space: pre;
+      }
+      .row.open .raw {
+        display: block;
+      }
+
+      .empty {
+        padding: 40px 0;
+        color: var(--muted);
+        text-align: center;
+      }
+      @media (max-width: 520px) {
+        .row {
+          grid-template-columns: 62px 14px minmax(0, 1fr);
+        }
+        .t .ms {
+          display: none;
+        }
+        .kind {
+          min-width: 0;
+        }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .row {
+          transition: background-color 120ms ease;
+        }
+        .row:hover {
+          background: color-mix(in srgb, var(--surface) 60%, transparent);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header id="header">
+        <h1>Run <code id="run-id">…</code></h1>
+        <span class="status" id="status">loading</span>
+        <div class="meta" id="meta"></div>
+      </header>
+      <section class="summary" id="summary" aria-label="Run summary"></section>
+      <div class="filters" role="group" aria-label="Filters">
+        <label><input type="checkbox" id="f-calls" checked /> Model calls</label>
+        <label><input type="checkbox" id="f-hooks" checked /> Hook events</label>
+        <label><input type="checkbox" id="f-subs" checked /> Subagent rows</label>
+        <label><input type="checkbox" id="f-sys" /> System lines</label>
+        <span class="legend">
+          <span><i style="background: var(--main)"></i>main thread</span>
+          <span><i style="background: var(--sub)"></i>subagent</span>
+          <span><i style="background: var(--hook)"></i>hook</span>
+        </span>
+      </div>
+      <div class="timeline" id="timeline" aria-live="polite"></div>
+    </div>
+
+    <script>
+      ;(() => {
+        const $ = (id) => document.getElementById(id)
+        const esc = (s) =>
+          String(s).replace(
+            /[&<>"]/g,
+            (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
+          )
+        const num = (n) => Number(n).toLocaleString('en-US')
+        const secs = (ms) => (ms / 1000).toFixed(ms >= 10000 ? 0 : 1) + 's'
+        const clock = (iso) => {
+          const d = new Date(iso)
+          const hh = String(d.getUTCHours()).padStart(2, '0')
+          const mm = String(d.getUTCMinutes()).padStart(2, '0')
+          const ss = String(d.getUTCSeconds()).padStart(2, '0')
+          const ms = String(d.getUTCMilliseconds()).padStart(3, '0')
+          return `${hh}:${mm}:${ss}<span class="ms">.${ms}</span>`
+        }
+
+        // The Run's id is the last segment of this page's own URL, and the
+        // events file is beside the page. Both are read from `location`, so
+        // the page works unchanged behind a tunnel or a different port.
+        const base = location.pathname.replace(/\/+$/, '')
+        const runId = decodeURIComponent(base.slice(base.lastIndexOf('/') + 1))
+        const eventsUrl = `${base}/events.jsonl`
+        document.title = `Run ${runId}`
+        $('run-id').textContent = runId
+
+        const parse = (text) =>
+          text
+            .split('\n')
+            .filter((l) => l.trim().startsWith('{'))
+            .map((l) => {
+              try {
+                return JSON.parse(l)
+              } catch {
+                return null
+              }
+            })
+            .filter(Boolean)
+
+        // ---- summary --------------------------------------------------------
+        const summarise = (events) => {
+          const calls = events.filter((e) => e.type === 'model_call.completed')
+          const mainCalls = calls.filter((e) => !e.parent_tool_use_id)
+          const hooks = events.filter((e) => e.source === 'hook')
+          const toolCalls = hooks.filter((e) => e.event === 'PostToolUse')
+          const byTool = {}
+          for (const h of toolCalls) byTool[h.tool_name] = (byTool[h.tool_name] || 0) + 1
+          const errors = calls.flatMap((c) => c.tool_uses || []).filter((u) => u.is_error).length
+          const subs = events.filter((e) => e.type === 'subagent.started')
+          const results = events.filter((e) => e.type === 'invocation.finished')
+          const cost = results.length ? results[results.length - 1].total_cost_usd : undefined
+          const rate = [...events].reverse().find((e) => e.type === 'rate_limit')
+          const started = events.find((e) => e.type === 'run.started')
+          const ended = events.find((e) => e.type === 'run.finished' || e.type === 'run.failed')
+          const agent = events.find((e) => e.type === 'agent.finished')
+          const delivery = events.find((e) => e.type === 'delivery.finished')
+          const session = events.find((e) => e.type === 'session.started')
+          return {
+            calls,
+            mainCalls,
+            toolCalls,
+            byTool,
+            errors,
+            subs,
+            cost,
+            rate,
+            started,
+            ended,
+            agent,
+            delivery,
+            session,
+            results,
+          }
+        }
+
+        const setStatus = (text, cls) => {
+          const status = $('status')
+          status.textContent = text
+          status.className = `status ${cls}`
+        }
+
+        const renderHeader = (events, s) => {
+          if (s.ended && s.ended.type === 'run.failed') setStatus('failed', 'failed')
+          else if (s.ended) setStatus('finished', 'ok')
+          else setStatus('running', 'live')
+          const meta = []
+          if (s.started) {
+            if (s.started.project) meta.push(`project <b>${esc(s.started.project)}</b>`)
+            if (s.started.branch) meta.push(`branch <b>${esc(s.started.branch)}</b>`)
+            meta.push(`model <b>${esc(s.started.model || '')}</b>`)
+            if (s.started.run_id) meta.push(`orchestrator run <b>${esc(s.started.run_id)}</b>`)
+          }
+          if (s.session)
+            meta.push(`session <b>${esc(String(s.session.session_id || '').slice(0, 8))}</b>`)
+          if (s.agent && s.agent.commits) meta.push(`commits <b>${s.agent.commits.length}</b>`)
+          if (s.delivery && s.delivery.pull_request_url)
+            meta.push(
+              `pull request <a href="${esc(s.delivery.pull_request_url)}">${esc(s.delivery.pull_request_url)}</a>`,
+            )
+          if (s.ended && s.ended.duration_ms) meta.push(`wall <b>${secs(s.ended.duration_ms)}</b>`)
+          $('meta').innerHTML = meta.map((m) => `<span>${m}</span>`).join('')
+
+          const tools = Object.entries(s.byTool)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => `${esc(k)}&thinsp;×${v}`)
+            .join('&ensp;')
+          const util =
+            s.rate && s.rate.five_hour
+              ? `${Math.round((s.rate.five_hour.utilization || 0) * 100)}%`
+              : '—'
+          const util7 =
+            s.rate && s.rate.seven_day
+              ? `${Math.round((s.rate.seven_day.utilization || 0) * 100)}%`
+              : '—'
+          const cells = [
+            [
+              'Model calls',
+              `${s.calls.length} <small>${s.mainCalls.length} main · ${s.calls.length - s.mainCalls.length} subagent</small>`,
+            ],
+            ['Tool calls', `${s.toolCalls.length} <small>${tools || 'none yet'}</small>`],
+            ['Tool errors', s.errors ? `<span style="color:var(--error)">${s.errors}</span>` : '0'],
+            [
+              'Subagents',
+              `${s.subs.length}${s.subs.length ? ` <small>${esc(s.subs.map((x) => x.subagent_type).join(', '))}</small>` : ''}`,
+            ],
+            ['Cost', s.cost !== undefined ? `$${Number(s.cost).toFixed(3)}` : '—'],
+            ['Subscription', `${util} <small>5h</small>&ensp;${util7} <small>7d</small>`],
+          ]
+          $('summary').innerHTML = cells
+            .map(([k, v]) => `<div><span class="k">${k}</span><span class="v">${v}</span></div>`)
+            .join('')
+        }
+
+        // ---- rows -----------------------------------------------------------
+        const toolChips = (uses) =>
+          (uses || [])
+            .map(
+              (u) =>
+                `<span class="chip${u.is_error ? ' err' : ''}" title="${esc(u.id)}">${esc(u.name)}${u.is_error ? ' ✕' : ''}</span>`,
+            )
+            .join('')
+
+        const describe = (e) => {
+          const t = e.type
+          if (e.source === 'hook') {
+            const ev = e.event || t
+            const tool = e.tool_name ? `<span class="chip hook">${esc(e.tool_name)}</span>` : ''
+            const agent = e.agent_type
+              ? `<span class="id">${esc(e.agent_type)} ${esc(String(e.agent_id || '').slice(0, 8))}</span>`
+              : ''
+            const arg =
+              e.tool_input && e.tool_input !== 'null'
+                ? `<span class="arg">${esc(e.tool_input)}</span>`
+                : ''
+            const extra =
+              ev === 'PostToolUse' && e.response_bytes
+                ? `<span class="id">${num(e.response_bytes)} B back</span>`
+                : ''
+            return {
+              cls: 'hook' + (e.agent_id ? ' nested' : ''),
+              kind: ev,
+              html: `${tool}${agent}${extra}${arg}`,
+            }
+          }
+          switch (t) {
+            case 'model_call.completed': {
+              const nested = Boolean(e.parent_tool_use_id)
+              const err = (e.tool_uses || []).some((u) => u.is_error)
+              const text = e.text_chars
+                ? `<span class="id">${num(e.text_chars)} chars of text</span>`
+                : ''
+              const stop = e.stop_reason ? `<span class="id">${esc(e.stop_reason)}</span>` : ''
+              const arg =
+                (e.tool_uses || []).length === 1
+                  ? `<span class="arg">${esc(e.tool_uses[0].input || '')}</span>`
+                  : ''
+              return {
+                cls: `call${nested ? ' nested sub' : ''}${err ? ' err' : ''}`,
+                kind: nested ? 'subagent call' : 'model call',
+                n: `#${e.index}`,
+                html: `${toolChips(e.tool_uses)}${text}${stop}${arg}`,
+              }
+            }
+            case 'subagent.started':
+              return {
+                cls: 'sub',
+                kind: 'subagent',
+                task: e.task_id,
+                html: `<span class="text">started</span> <span class="chip sub">${esc(e.subagent_type || 'agent')}</span> <span class="text">${esc(e.description || '')}</span> <span class="id">task ${esc(String(e.task_id || '').slice(0, 8))}${e.backgrounded ? ' · background' : ''}</span> <button class="expander" type="button" data-task="${esc(e.task_id || '')}" aria-expanded="false">0 progress</button>`,
+              }
+            case 'subagent.progress':
+              return {
+                cls: 'sub nested progress',
+                kind: 'progress',
+                task: e.task_id,
+                html: `<span class="text">${e.tool_uses || 0} tool uses · ${num(e.total_tokens || 0)} tokens · ${secs(e.duration_ms || 0)}</span>${e.last_tool_name ? ` <span class="chip sub">${esc(e.last_tool_name)}</span>` : ''}`,
+              }
+            case 'subagent.finished':
+              return {
+                cls: 'sub',
+                kind: 'subagent',
+                html: `<span class="text">${esc(e.status || 'finished')}</span> <span class="id">task ${esc(String(e.task_id || '').slice(0, 8))}</span>${e.summary_chars ? ` <span class="id">${num(e.summary_chars)}-char report</span>` : ''}`,
+              }
+            case 'session.started':
+              return {
+                cls: 'phase',
+                kind: 'session',
+                html: `<span class="text">Claude Code session started</span> <span class="id">${esc(String(e.session_id || '').slice(0, 8))} · ${esc(e.model || '')} · ${e.tools || '?'} tools</span>`,
+              }
+            case 'session.resumed':
+              return {
+                cls: 'phase',
+                kind: 'session',
+                html: `<span class="text">Session resumed</span> <span class="id">invocation ${e.invocation}, woken by a subagent result</span>`,
+              }
+            case 'invocation.finished': {
+              const u = e.usage || {}
+              return {
+                cls: 'phase',
+                kind: 'result',
+                html: `<span class="text">Invocation ${e.invocation} ${esc(e.subtype || '')}</span> <span class="id">${e.num_turns || 0} turns · ${num(u.output_tokens || 0)} out · ${num(u.cache_read_input_tokens || 0)} cached in · api ${secs(e.duration_api_ms || 0)}</span>`,
+              }
+            }
+            case 'rate_limit': {
+              const f = e.five_hour || {},
+                s7 = e.seven_day || {}
+              return {
+                cls: 'sys',
+                kind: 'subscription',
+                html: `<span class="text">5h ${Math.round((f.utilization || 0) * 100)}% · 7d ${Math.round((s7.utilization || 0) * 100)}% · ${esc(e.status || '')}</span>`,
+              }
+            }
+            case 'system':
+              return {
+                cls: 'sys',
+                kind: 'system',
+                html: `<span class="text">${esc(e.subtype || '')}</span>`,
+              }
+            case 'other':
+              return {
+                cls: 'sys',
+                kind: 'other',
+                html: `<span class="text">${esc(e.line_type || '')}</span>`,
+              }
+            case 'run.started':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Run started on ${esc(e.branch || '')}</span> <span class="id">${esc(e.project || '')} · base ${esc(e.base || '')}</span> <span class="arg">${esc(e.task || '')}</span>`,
+              }
+            case 'image.ready':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Image ${e.built ? 'built' : 'ready'}</span> <span class="id">${esc(e.image || '')}</span>`,
+              }
+            case 'agent.started':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Agent starting</span> <span class="id">${esc(e.model || '')}</span>`,
+              }
+            case 'agent.finished':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Agent finished · ${(e.commits || []).length} commit${(e.commits || []).length === 1 ? '' : 's'} · ${secs(e.duration_ms || 0)}</span> <span class="id">${esc((e.commits || []).map((c) => c.slice(0, 7)).join(' '))}</span>`,
+              }
+            case 'delivery.finished':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Delivery ${esc(e.outcome || '')}</span> <span class="id">${esc(e.pull_request_url || e.reason || '')}</span>`,
+              }
+            case 'run.finished':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Run finished · ${secs(e.duration_ms || 0)}</span>`,
+              }
+            case 'run.failed':
+              return {
+                cls: 'phase err',
+                kind: 'harness',
+                html: `<span class="text">Run failed</span> <span class="arg">${esc(e.error || '')}</span>`,
+              }
+            default:
+              return { cls: 'sys', kind: esc(t || ''), html: '' }
+          }
+        }
+
+        const rowHtml = (e, i) => {
+          const d = describe(e)
+          const task = d.task ? ` data-task="${esc(d.task)}"` : ''
+          return `<div class="row ${d.cls}" data-i="${i}"${task} tabindex="0">
+          <span class="t">${clock(e.t)}</span>
+          <span class="dot"></span>
+          <div class="body">
+            <div class="line"><span class="kind">${d.kind}</span>${d.n ? `<span class="n">${d.n}</span>` : ''}${d.html}</div>
+          </div>
+          <pre class="raw">${esc(JSON.stringify(e, null, 2))}</pre>
+        </div>`
+        }
+
+        // ---- filters, and the folded progress rows -------------------------
+        // A subagent's progress lines are many and say little; they fold into
+        // its start row and open on its expander.
+        const expanded = new Set()
+        const progressCount = {}
+
+        const applyFilters = () => {
+          const show = {
+            calls: $('f-calls').checked,
+            hooks: $('f-hooks').checked,
+            subs: $('f-subs').checked,
+            sys: $('f-sys').checked,
+          }
+          for (const row of document.querySelectorAll('.row')) {
+            const c = row.classList
+            let visible = true
+            if (c.contains('sys')) visible = show.sys
+            else if (c.contains('hook'))
+              visible = show.hooks && (show.subs || !c.contains('nested'))
+            else if (c.contains('call'))
+              visible = show.calls && (show.subs || !c.contains('nested'))
+            else if (c.contains('progress')) visible = show.subs && expanded.has(row.dataset.task)
+            else if (c.contains('sub')) visible = show.subs
+            row.classList.toggle('hidden', !visible)
+          }
+        }
+        for (const id of ['f-calls', 'f-hooks', 'f-subs', 'f-sys'])
+          $(id).addEventListener('change', applyFilters)
+
+        const updateExpanders = () => {
+          for (const button of document.querySelectorAll('.expander')) {
+            const task = button.dataset.task
+            const n = progressCount[task] || 0
+            button.textContent = `${n} progress`
+            button.classList.toggle('expanded', expanded.has(task))
+            button.setAttribute('aria-expanded', String(expanded.has(task)))
+          }
+        }
+
+        $('timeline').addEventListener('click', (ev) => {
+          const expander = ev.target.closest('.expander')
+          if (expander) {
+            const task = expander.dataset.task
+            if (expanded.has(task)) expanded.delete(task)
+            else expanded.add(task)
+            updateExpanders()
+            applyFilters()
+            return
+          }
+          const row = ev.target.closest('.row')
+          if (row && !row.classList.contains('sys')) row.classList.toggle('open')
+        })
+        $('timeline').addEventListener('keydown', (ev) => {
+          if (ev.key !== 'Enter' && ev.key !== ' ') return
+          if (ev.target.closest('.expander')) return
+          const row = ev.target.closest('.row')
+          if (row) {
+            ev.preventDefault()
+            row.classList.toggle('open')
+          }
+        })
+
+        // ---- render + live tail ---------------------------------------------
+        // Rows are appended, never rebuilt: a Run with thousands of events is
+        // polled every two seconds, and only what is new touches the DOM.
+        let rendered = 0
+        const render = (events) => {
+          const s = summarise(events)
+          renderHeader(events, s)
+          const tl = $('timeline')
+          if (events.length === 0) {
+            tl.innerHTML = '<div class="empty">No events yet.</div>'
+            return s
+          }
+          if (rendered === 0) tl.innerHTML = ''
+          if (events.length > rendered) {
+            const fresh = events.slice(rendered)
+            for (const e of fresh) {
+              if (e.type === 'subagent.progress' && e.task_id)
+                progressCount[e.task_id] = (progressCount[e.task_id] || 0) + 1
+            }
+            tl.insertAdjacentHTML(
+              'beforeend',
+              fresh.map((e, k) => rowHtml(e, rendered + k)).join(''),
+            )
+            rendered = events.length
+            updateExpanders()
+            applyFilters()
+          }
+          return s
+        }
+
+        const poll = async () => {
+          let s
+          try {
+            const res = await fetch(eventsUrl, { cache: 'no-store' })
+            if (res.status === 404) {
+              // Handed out at Dispatch, before the Run has a directory: keep
+              // asking. A typo in the id looks the same, and says so.
+              setStatus('waiting for the Run to start', '')
+              $('timeline').innerHTML =
+                '<div class="empty">No Run with this id has started yet. This page keeps checking; if it was queued, it will appear here.</div>'
+            } else if (!res.ok) {
+              setStatus(`events.jsonl: HTTP ${res.status}`, 'failed')
+            } else {
+              s = render(parse(await res.text()))
+            }
+          } catch {
+            setStatus('cannot reach the Harness', 'failed')
+          }
+          if (!s || !s.ended) setTimeout(poll, 2000)
+        }
+        poll()
+      })()
+    </script>
+  </body>
+</html>

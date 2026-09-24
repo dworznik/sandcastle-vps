@@ -214,6 +214,10 @@ const EXTRAS = '/app/docker/sandbox/extras.Dockerfile'
  * No `.sandcastle/.env` is written. A Project carries no credentials (ADR
  * 0006), and a stale copy of a token the Harness already holds is worse than
  * none.
+ *
+ * `sandcastle init` ignores `logs/` and `worktrees/` under `.sandcastle/`; the
+ * run directories a Run keeps beside them are this stack's, so this adds
+ * `runs/` to the same file.
  */
 export const onboardScript = (name: string): string => `set -eu
 cd "$WORKSPACE_ROOT"/${shellQuote(name)}
@@ -230,6 +234,7 @@ ${SANDCASTLE} init \\
   --build-image false \\
   --install-template-deps false > /dev/null
 cat ${EXTRAS} >> .sandcastle/Dockerfile
+printf 'runs/\\n' >> .sandcastle/.gitignore
 printf 'state\\tonboarded\\n'`
 
 /** Build the Project's own image, through the Target engine's socket. */

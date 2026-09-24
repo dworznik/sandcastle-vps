@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import type { SandboxHooks } from '@ai-hero/sandcastle'
 import type { DockerOptions } from '@ai-hero/sandcastle/sandboxes/docker'
 import { CREDENTIAL_KEYS, type AgentCredentials } from './env.js'
+import { INSTALL_HOOKS_COMMAND, SANDBOX_HOOKS_FILE } from './run-logs/hooks.js'
 
 /** sandcastle names this `MountConfig` but does not export it; take it from
  *  the one option that does, so the shape can never drift from the caller. */
@@ -56,6 +57,13 @@ export interface AgentSandbox {
   readonly credentials: AgentCredentials
 }
 
+/** What a Run gives the Sandbox to write its own account of itself into. */
+export interface Observation {
+  /** The Run's hooks file on the Target, already created: Docker makes a
+   *  directory for a bind source that does not exist. */
+  readonly hooksFile: string
+}
+
 /** Every credential, in the order they are reported in — which is the order
  *  `CREDENTIAL_KEYS` declares them, so adding one there is the whole change. */
 const REQUIRED = Object.keys(CREDENTIAL_KEYS) as (keyof AgentCredentials)[]
@@ -74,6 +82,7 @@ const MISSING_HINT =
  */
 export const agentSandbox = (
   credentials: Partial<AgentCredentials>,
+  observe: Observation,
   exists: (path: string) => boolean = existsSync,
 ): AgentSandbox => {
   const missing = REQUIRED.filter((field) => !credentials[field])
@@ -108,8 +117,16 @@ export const agentSandbox = (
     },
     mounts: [
       { hostPath: complete.signingKeyPath, sandboxPath: SANDBOX_SIGNING_KEY_PATH, readonly: true },
+      // The one file of the run directory the Sandbox may write: the agent
+      // appends its own account of the Run there, and cannot touch the
+      // Harness's records beside it.
+      { hostPath: observe.hooksFile, sandboxPath: SANDBOX_HOOKS_FILE, readonly: false },
     ],
-    hooks: { sandbox: { onSandboxReady: [{ command: GIT_SETUP_COMMAND }] } },
+    hooks: {
+      sandbox: {
+        onSandboxReady: [{ command: GIT_SETUP_COMMAND }, { command: INSTALL_HOOKS_COMMAND }],
+      },
+    },
     credentials: complete,
   }
 }

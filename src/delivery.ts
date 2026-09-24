@@ -280,8 +280,9 @@ export interface DeliveryProvenance {
   readonly project: string
   /** The Target the Run executed on. */
   readonly target: string
-  /** The transcript, as a path on the Target. #43 replaces this with a URL. */
-  readonly transcript?: string
+  /** The Run's log — its run page on the Harness, on the Target's loopback,
+   *  so a reviewer reaches it through the same tunnel as the dashboard. */
+  readonly logs: string
 }
 
 export interface DeliveryInput {
@@ -333,7 +334,7 @@ export const pullRequestBody = (input: {
     `- Project: ${input.provenance.project}`,
     `- Target: ${input.provenance.target}`,
     `- Base: ${input.base}`,
-    `- Transcript: ${input.provenance.transcript ?? '(not captured)'} — a path on the Target`,
+    `- Logs: ${input.provenance.logs} — on the Target's loopback, through an SSH tunnel`,
     '',
   ].join('\n')
 
