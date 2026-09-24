@@ -1,15 +1,15 @@
 # sandcastle-vps
 
-A [sandcastle](https://github.com/mattpocock/sandcastle) harness for the VPS: dispatch background agent Runs against the project checkouts you already work on in [claude-tmux](https://github.com/dworznik/claude-tmux) sessions. A task description goes in, a `sandcastle/<slug>` Task Branch comes out — visible immediately in your live checkout.
+A [sandcastle](https://github.com/mattpocock/sandcastle) harness for the VPS: dispatch background agent Runs against the project checkouts you already work on in [claude-tmux](https://github.com/dworznik/claude-tmux) sessions. A task description goes in; a `sandcastle/<slug>` Task Branch comes out — visible immediately in your live checkout, pushed, and proposed as a pull request.
 
-See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing decisions (branch-only strategy on shared checkouts; Inngest with retries disabled; strict sandcastle conventions with per-project Onboarding).
+See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing decisions (branch-only strategy on shared checkouts; Inngest with retries disabled; strict sandcastle conventions with per-project Onboarding; Delivery inside the Run).
 
 ## Architecture
 
 Two containers on the Target, neither reachable from outside it:
 
 - **Orchestrator** — a self-hosted Inngest server. Queues Dispatches, serializes Runs per Project (concurrency 1), and records Run history. Dashboard on 8288.
-- **Harness** — this repo's TypeScript app (`@ai-hero/sandcastle`), executing each Run: resolves the Project, ensures its image, and locks the branch strategy to a named Task Branch. It spawns each Sandbox as a sibling container through the Target engine's socket, and mounts the workspace root at the same path it has on the Target so those Sandboxes' bind mounts resolve. See [ADR 0006](docs/adr/0006-containerised-harness-and-installer-over-connectors.md).
+- **Harness** — this repo's TypeScript app (`@ai-hero/sandcastle`), executing each Run: resolves the Project and the Run's Base, ensures its image, locks the branch strategy to a named Task Branch, and Delivers the result. It spawns each Sandbox as a sibling container through the Target engine's socket, and mounts the workspace root at the same path it has on the Target so those Sandboxes' bind mounts resolve. See [ADR 0006](docs/adr/0006-containerised-harness-and-installer-over-connectors.md).
 
 A Run only targets an **Onboarded** Project — a checkout with its own committed `.sandcastle/` directory, whose own `sandcastle:<dir-name>` image runs the Sandbox. Dispatching to a checkout that was never Onboarded fails and tells you to Onboard it. When a Project's image is missing the Harness builds it once, and never rebuilds an existing one — so Dockerfile edits need a manual rebuild. See [ADR 0003](docs/adr/0003-strict-sandcastle-conventions-per-project-onboarding.md).
 
@@ -70,7 +70,7 @@ The Dispatch surface is published on the Target's loopback and nowhere else — 
 
 ```bash
 ~/.sandcastle-vps/scripts/vps/sandcastle-run my-app "Fix the flaky login test" \
-  [--branch sandcastle/login-test] [--model claude-opus-4-8]
+  [--branch sandcastle/login-test] [--base main] [--model claude-opus-4-8]
 ```
 
 It needs `curl` and `jq` on the Target. Nothing else does — install and Onboarding go through the Harness container — so if they aren't there, post to the surface directly instead:
@@ -82,6 +82,10 @@ curl -sS -X POST http://127.0.0.1:3000/dispatch \
 ```
 
 Dispatching is non-blocking — the Run is queued by the Orchestrator, not executed in your shell. Commits land on the Task Branch; the Project's HEAD and working tree are never touched. Re-dispatching to the same branch resumes that Task Branch's worktree — that's how you iterate on a task.
+
+A Run that completes then **Delivers**: it pushes the Task Branch and opens a pull request against the Run's **Base**, or updates the one that branch already has. The Base is what the branch is cut from as well as what its pull request targets; `--base` names it, and without one the Project remote's default branch is used. A re-dispatch keeps the Base the branch was cut from, and naming a conflicting one is refused rather than rebasing work that may already be under review.
+
+The Run's result says which of four things happened — `delivered`, `updated`, `nothing-to-deliver`, or `skipped` because the Run did not complete — with the pull request URL on the first two and a reason on the last two. A Delivery that cannot be completed fails the Run and names the branch and its commits; a Run that reports success always has a pull request or a reason there is none. See [ADR 0008](docs/adr/0008-delivery-inside-the-run.md).
 
 From anywhere else (your laptop, a claude-tmux dev container), tunnel first and point the command at your end of it:
 
