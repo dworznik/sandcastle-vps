@@ -6,17 +6,17 @@ import { taskBranch, validateBranch } from '../branch.js'
 import {
   deliver,
   deliveryNote,
-  deliveryPorts,
+  skippedDelivery,
   projectSlug,
   recordBase,
   resolveBase,
 } from '../delivery.js'
 import { env } from '../env.js'
+import { deliveryPorts } from '../delivery-ports.js'
+import { errorDetail } from '../errors.js'
 import { ensureSandboxImage } from '../image.js'
 import { inngest, runRequested } from '../inngest.js'
 import { resolveProject } from '../projects.js'
-
-const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 export const sandcastleRun = inngest.createFunction(
   {
@@ -48,6 +48,18 @@ export const sandcastleRun = inngest.createFunction(
       branch,
       requested: event.data.base,
     })
+    // Recorded before the Run, not after it: sandcastle creates the Task Branch
+    // when it creates the worktree, which is before the agent starts. A Run that
+    // then fails leaves a real branch behind, and a branch with no recorded Base
+    // is one a later Dispatch could silently re-point — sandcastle ignores
+    // `baseBranch` for an existing branch, so the work would continue from the
+    // old start point while its pull request proposed it against a new Base.
+    //
+    // The cost is a recorded Base for a branch that was never cut, in the narrow
+    // case of a Run failing before its worktree exists. That makes a later
+    // Dispatch naming a different Base refuse and say to use a new branch, which
+    // is the conservative direction to be wrong in.
+    await recordBase(ports, branch, base)
 
     const { built } = await ensureSandboxImage(project)
     logger.info('starting run', {
@@ -68,6 +80,9 @@ export const sandcastleRun = inngest.createFunction(
       // all a reviewer needs it for.
       target: hostname(),
     }
+
+    /** Everything a Delivery of this Run needs that is known before it runs. */
+    const delivering = { slug, branch, base, task: event.data.task }
 
     let result: RunResult
     try {
@@ -105,32 +120,29 @@ export const sandcastleRun = inngest.createFunction(
         },
       })
     } catch (cause) {
-      // A Run that failed does not Deliver. Its commits survive on the Task
-      // Branch and a re-dispatch continues them — but the Loop's one human gate
-      // is a merge, and a pull request from a half-finished Run spends that
-      // attention on work nobody claims is done.
-      //
-      // Said in the failure, so the absent pull request reads as a consequence
-      // of this failure rather than as a second one. `deliver` reaches neither
-      // git nor GitHub for an incomplete Run; it is asked because it is the one
-      // thing that decides what a Delivery did.
-      const skipped = await deliver(ports, {
-        slug,
-        branch,
-        base,
-        completed: false,
-        incompleteReason: detail(cause),
-        commits: [],
-        task: event.data.task,
-        provenance,
+      // A Run that failed does not Deliver: no push, no pull request, and
+      // nothing asked of git or GitHub. Said in the failure, so the absent pull
+      // request reads as a consequence of this failure rather than as a second
+      // one.
+      const skipped = skippedDelivery({ branch, base, reason: errorDetail(cause) })
+      throw new Error(`${errorDetail(cause)}\n\nNot Delivered — ${deliveryNote(skipped)}`, {
+        cause,
       })
-      throw new Error(`${detail(cause)}\n\nNot Delivered — ${deliveryNote(skipped)}`, { cause })
     }
 
-    // The branch exists now, so the Base it was cut from can be recorded
-    // against it — which is what lets a re-dispatch continue this Task Branch
-    // without re-resolving, and what makes a conflicting Base refusable.
-    await recordBase(ports, result.branch, base)
+    // Everything after this — the recorded Base, the push, the pull request's
+    // head — is keyed on the branch name the Base was resolved for. sandcastle
+    // echoes back the branch it actually worked on, and for the `branch` strategy
+    // that is the same name; if the two ever disagreed, a Delivery would propose
+    // a branch nobody planned, so disagreeing is a failure rather than something
+    // to quietly reconcile.
+    if (result.branch !== branch) {
+      throw new Error(
+        `The Run asked for Task Branch ${branch} and sandcastle worked on ${result.branch}. ` +
+          `Its commits are on ${result.branch}; nothing was Delivered, because the Base was ` +
+          `resolved for ${branch}.`,
+      )
+    }
 
     // Delivery is part of the Run, not a later phase and not a second function:
     // the Run's result has to carry the pull request URL, and only something
@@ -145,19 +157,15 @@ export const sandcastleRun = inngest.createFunction(
     // separate ticket and its own set of problems (a RunResult carrying full
     // stdout, against a step-output size limit). See ADR 0008.
     const delivery = await deliver(ports, {
-      slug,
-      branch: result.branch,
-      base,
-      completed: true,
+      ...delivering,
       commits: result.commits.map((c) => c.sha),
-      task: event.data.task,
       provenance: { ...provenance, transcript: result.logFilePath },
     })
     logger.info(`delivery ${deliveryNote(delivery)}`)
 
     return {
       project: project.name,
-      branch: result.branch,
+      branch,
       base,
       commits: result.commits.map((c) => c.sha),
       completionSignal: result.completionSignal,

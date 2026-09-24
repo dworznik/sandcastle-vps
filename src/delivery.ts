@@ -1,10 +1,6 @@
-import { execFile } from 'node:child_process'
-import { chmod, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { z } from 'zod'
 import { validateBranch } from './branch.js'
+import { errorDetail } from './errors.js'
 import { slugFromRemote, slugOwner } from './repo.js'
 
 /**
@@ -19,16 +15,10 @@ import { slugFromRemote, slugOwner } from './repo.js'
  * The effects are two ports, `git` and `github`, so every decision this module
  * makes is exercisable without a checkout or a network. Neither port throws for
  * an answer it got: a non-zero git exit and a 404 are answers, and which of
- * them is fatal is this module's judgement rather than the port's.
+ * them is fatal is this module's judgement rather than the port's. The ports
+ * that actually reach a checkout and the API live in `delivery-ports.ts`, so
+ * nothing here needs a subprocess or a socket to be read or tested.
  */
-
-const exec = promisify(execFile)
-
-/** git in a Project checkout is local work plus one network round-trip; a minute
- *  is generous for both and short enough to fail a hung fetch legibly. */
-const GIT_TIMEOUT_MS = 60 * 1000
-const GIT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-const GITHUB_TIMEOUT_MS = 30 * 1000
 
 export interface GitResult {
   readonly code: number
@@ -53,105 +43,6 @@ export interface DeliveryPorts {
   readonly git: (args: readonly string[]) => Promise<GitResult>
   readonly github: (request: GitHubRequest) => Promise<GitHubResponse>
 }
-
-// ------------------------------------------------------------ authenticated git
-
-/**
- * What git calls to answer a credential prompt.
- *
- * The token is named, never interpolated. A credential on a command line
- * reaches `ps` and every log that echoes a command, which is the rule
- * `GIT_SETUP_COMMAND` and the Onboarding scripts already follow. The
- * consequence worth stating: this script holds no secret, so it can be written
- * once per process and left on disk.
- *
- * git asks twice — for a username and then a password — and distinguishes the
- * two only by the prompt text it passes as `$1`. A script that answered both
- * the same way would send the token as the username and then fail to
- * authenticate.
- */
-export const GIT_ASKPASS_SCRIPT = `#!/bin/sh
-case "$1" in
-  Username*) printf '%s\\n' x-access-token ;;
-  *) printf '%s\\n' "$GH_TOKEN" ;;
-esac
-`
-
-const ASKPASS_PATH = join(tmpdir(), 'sandcastle-git-askpass.sh')
-
-let written: Promise<string> | undefined
-
-/** Write the askpass script once per process. `writeFile`'s mode applies only
- *  when it creates the file, so the mode is set separately — an askpass git
- *  cannot execute fails as an authentication failure, which reads as the wrong
- *  problem entirely. */
-const askpassScript = (): Promise<string> =>
-  (written ??= (async () => {
-    await writeFile(ASKPASS_PATH, GIT_ASKPASS_SCRIPT)
-    await chmod(ASKPASS_PATH, 0o700)
-    return ASKPASS_PATH
-  })())
-
-/**
- * The real ports, for one Project.
- *
- * Every git call is authenticated, not only the push: `git fetch` against a
- * private Project needs the token too, and a fetch that silently failed would
- * resolve a Base from a stale remote ref.
- */
-export const deliveryPorts = (checkout: string, githubToken: string): DeliveryPorts => ({
-  git: async (args) => {
-    const env = {
-      ...process.env,
-      GH_TOKEN: githubToken,
-      GIT_ASKPASS: await askpassScript(),
-      // No terminal to answer a prompt on, so a credential the askpass script
-      // cannot supply must fail rather than hang until the timeout.
-      GIT_TERMINAL_PROMPT: '0',
-    }
-    try {
-      const { stdout, stderr } = await exec('git', [...args], {
-        cwd: checkout,
-        env,
-        timeout: GIT_TIMEOUT_MS,
-        maxBuffer: GIT_MAX_OUTPUT_BYTES,
-      })
-      return { code: 0, stdout: stdout.trim(), stderr: stderr.trim() }
-    } catch (error) {
-      const failed = error as { code?: unknown; stdout?: string; stderr?: string }
-      // A numeric `code` is git's own exit status, which is an answer. Anything
-      // else — ENOENT, a timeout kill — is this process failing to ask.
-      if (typeof failed.code !== 'number') throw error
-      return {
-        code: failed.code,
-        stdout: (failed.stdout ?? '').trim(),
-        stderr: (failed.stderr ?? '').trim(),
-      }
-    }
-  },
-  github: async ({ method, path, body }) => {
-    const init: RequestInit = {
-      method,
-      headers: {
-        authorization: `Bearer ${githubToken}`,
-        accept: 'application/vnd.github+json',
-        'x-github-api-version': '2022-11-28',
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-    }
-    if (body !== undefined) init.body = JSON.stringify(body)
-    const response = await fetch(`https://api.github.com${path}`, init)
-    const text = await response.text()
-    let parsed: unknown
-    try {
-      parsed = text ? JSON.parse(text) : undefined
-    } catch {
-      parsed = text
-    }
-    return { status: response.status, body: parsed }
-  },
-})
 
 // ------------------------------------------------------------------ git helpers
 
@@ -191,8 +82,6 @@ export interface ResolvedBase {
   /** The ref a new Task Branch is cut from — a remote-tracking ref, freshly
    *  fetched, never the shared checkout's HEAD. */
   readonly startPoint: string
-  /** The Base this Task Branch already recorded, when it had one. */
-  readonly recorded: string | undefined
 }
 
 const repository = z.object({ default_branch: z.string().min(1) })
@@ -263,7 +152,7 @@ export const resolveBase = async (
         `${input.branch} from, and nothing to propose it against.`,
     )
   }
-  return { base, startPoint, recorded }
+  return { base, startPoint }
 }
 
 /**
@@ -318,37 +207,26 @@ export type DeliveryDecision =
   /** Push; the open pull request already proposes the branch. */
   | { readonly outcome: 'updated'; readonly pullRequestUrl: string }
   | { readonly outcome: 'nothing-to-deliver'; readonly reason: string }
-  | { readonly outcome: 'skipped'; readonly reason: string }
 
 export const decideDelivery = (facts: {
   readonly branch: string
   readonly base: string
-  /** Whether the Run reached the end of its work. */
-  readonly completed: boolean
-  readonly incompleteReason?: string
   /** Commits on the Task Branch that the Base does not have — the branch's
    *  position, not this Run's contribution to it. */
   readonly commitsAhead: number
   readonly openPullRequestUrl?: string
 }): DeliveryDecision => {
-  // First, because a Run that did not finish must not spend the Loop's one
-  // human gate on work nobody claims is done. Its commits survive on the Task
-  // Branch, and re-dispatching continues them.
-  if (!facts.completed) {
-    return {
-      outcome: 'skipped',
-      reason:
-        `The Run did not complete (${facts.incompleteReason ?? 'reason unrecorded'}), so ` +
-        `${facts.branch} was not proposed. Its commits are on that branch; re-dispatch to ` +
-        `continue them.`,
-    }
-  }
   // Before the pull request, deliberately: a pull request that proposes nothing
-  // is not live work, so the branch's position decides first.
+  // is not live work, so the branch's position decides first. Its URL is still
+  // named, because "there is an empty pull request open" is more use to whoever
+  // reads this than "nothing happened".
   if (facts.commitsAhead === 0) {
+    const open = facts.openPullRequestUrl
+      ? ` Its open pull request ${facts.openPullRequestUrl} proposes nothing.`
+      : ''
     return {
       outcome: 'nothing-to-deliver',
-      reason: `${facts.branch} is not ahead of ${facts.base}, so there is nothing to propose.`,
+      reason: `${facts.branch} is not ahead of ${facts.base}, so there is nothing to propose.${open}`,
     }
   }
   if (facts.openPullRequestUrl) {
@@ -356,6 +234,27 @@ export const decideDelivery = (facts: {
   }
   return { outcome: 'delivered' }
 }
+
+/**
+ * The Delivery a Run that did not complete does not get.
+ *
+ * Not a `decideDelivery` outcome, and not something `deliver` short-circuits:
+ * "the Run did not finish" is a fact about the Run, decided before a Delivery
+ * is consulted at all. The Loop's one human gate is a merge, and a pull request
+ * from a half-finished Run spends that attention on work nobody claims is done.
+ */
+export const skippedDelivery = (input: {
+  readonly branch: string
+  readonly base: string
+  readonly reason: string
+}): Delivery => ({
+  outcome: 'skipped',
+  branch: input.branch,
+  base: input.base,
+  reason:
+    `The Run did not complete (${input.reason}), so ${input.branch} was not proposed. ` +
+    `Its commits are on that branch; re-dispatch to continue them.`,
+})
 
 interface DeliveredTo {
   readonly branch: string
@@ -389,8 +288,6 @@ export interface DeliveryInput {
   readonly slug: string
   readonly branch: string
   readonly base: string
-  readonly completed: boolean
-  readonly incompleteReason?: string
   /** The commits this Run added, named in a Delivery failure so the work stays
    *  findable. Not what decides the outcome — the branch's position is. */
   readonly commits: readonly string[]
@@ -534,21 +431,14 @@ const deliverOnce = async (ports: DeliveryPorts, input: DeliveryInput): Promise<
   const range = `refs/remotes/origin/${input.base}..${branchRef}`
   const { branch, base } = input
 
-  // Gathered only for a Run that completed: the facts cost a round-trip each,
-  // and a Run that did not complete has already decided the outcome.
-  const facts = input.completed
-    ? {
-        commitsAhead: await commitsAhead(ports, range, base),
-        openPullRequestUrl: await openPullRequestUrl(ports, input.slug, branch),
-      }
-    : { commitsAhead: 0, openPullRequestUrl: undefined }
-
-  const decision = decideDelivery({ ...input, ...facts })
-  if (decision.outcome === 'skipped') {
-    return { outcome: 'skipped', branch, base, reason: decision.reason }
-  }
+  const decision = decideDelivery({
+    branch,
+    base,
+    commitsAhead: await commitsAhead(ports, range, base),
+    openPullRequestUrl: await openPullRequestUrl(ports, input.slug, branch),
+  })
   if (decision.outcome === 'nothing-to-deliver') {
-    return { outcome: 'nothing-to-deliver', branch, base, reason: decision.reason }
+    return { ...decision, branch, base }
   }
 
   // The refspec is explicit so no `push.default` in the Harness's git config can
@@ -587,8 +477,6 @@ const pause = (ms: number): Promise<void> =>
     setTimeout(resolve, ms)
   })
 
-const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
-
 /**
  * Deliver a Run: push its Task Branch and open or update its pull request.
  *
@@ -611,7 +499,7 @@ export const deliver = async (
       if (attempt >= DELIVERY_ATTEMPTS) {
         throw new Error(
           `Delivery failed for ${input.branch} after ${DELIVERY_ATTEMPTS} attempts: ` +
-            `${detail(cause)}\nThe Run's work is not lost: its commits are on ${input.branch} ` +
+            `${errorDetail(cause)}\nThe Run's work is not lost: its commits are on ${input.branch} ` +
             `(${input.commits.join(', ') || 'none added by this Run'}), based on ${input.base}. ` +
             `Re-dispatching to the same branch re-attempts the Delivery.`,
           { cause },

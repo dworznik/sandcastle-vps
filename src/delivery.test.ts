@@ -4,11 +4,11 @@ import {
   decideDelivery,
   deliver,
   deliveryNote,
-  GIT_ASKPASS_SCRIPT,
   pullRequestBody,
   pullRequestTitle,
   recordBase,
   resolveBase,
+  skippedDelivery,
   type DeliveryPorts,
 } from './delivery.js'
 
@@ -55,11 +55,7 @@ describe('resolveBase', () => {
     const { github } = fakeGitHub({})
     await expect(
       resolveBase({ git, github }, { slug: 'o/r', branch: 'sandcastle/task', requested: 'main' }),
-    ).resolves.toEqual({
-      base: 'main',
-      startPoint: 'refs/remotes/origin/main',
-      recorded: undefined,
-    })
+    ).resolves.toEqual({ base: 'main', startPoint: 'refs/remotes/origin/main' })
   })
 
   // The remote's default branch, not the checkout's `origin/HEAD`: that ref is
@@ -113,11 +109,7 @@ describe('resolveBase', () => {
       const { github, calls } = fakeGitHub({})
       await expect(
         resolveBase({ git, github }, { slug: 'o/r', branch: 'sandcastle/task' }),
-      ).resolves.toEqual({
-        base: 'main',
-        startPoint: 'refs/remotes/origin/main',
-        recorded: 'main',
-      })
+      ).resolves.toEqual({ base: 'main', startPoint: 'refs/remotes/origin/main' })
       expect(calls).toEqual([])
     })
 
@@ -154,30 +146,10 @@ describe('recordBase', () => {
   })
 })
 
-// The token is named, never interpolated: a value on a command line reaches
-// `ps` and any log that echoes a command. The same rule GIT_SETUP_COMMAND and
-// the Onboarding scripts follow, which is why this asserts on the text.
-describe('GIT_ASKPASS_SCRIPT', () => {
-  it('reads the token from the environment', () => {
-    expect(GIT_ASKPASS_SCRIPT).toContain('"$GH_TOKEN"')
-  })
-
-  it('answers the username prompt with the token-bearer name git expects', () => {
-    expect(GIT_ASKPASS_SCRIPT).toContain('x-access-token')
-  })
-
-  // git distinguishes its two prompts only by the text it passes as $1, so a
-  // script that answered both the same way would send the token as a username.
-  it('tells the two prompts apart', () => {
-    expect(GIT_ASKPASS_SCRIPT).toContain('case "$1" in')
-  })
-})
-
 describe('decideDelivery', () => {
   const facts = {
     branch: 'sandcastle/task',
     base: 'main',
-    completed: true,
     commitsAhead: 2,
     openPullRequestUrl: undefined,
   }
@@ -209,32 +181,48 @@ describe('decideDelivery', () => {
     expect(decision).toMatchObject({ reason: expect.stringContaining('not ahead of main') })
   })
 
-  // A pull request that proposes nothing is not a pull request worth reporting
-  // as live work, so the branch's position decides before its pull request does.
+  // A pull request that proposes nothing is not live work, so the branch's
+  // position decides before its pull request does — but the URL is still named,
+  // because an empty open pull request is more use to know about than "nothing".
   it('still has nothing to deliver when a stale pull request is open', () => {
     expect(
       decideDelivery({ ...facts, commitsAhead: 0, openPullRequestUrl: 'https://gh/pr/1' }),
-    ).toMatchObject({ outcome: 'nothing-to-deliver' })
-  })
-
-  // The Loop's one human gate is a merge. A pull request from a Run that did
-  // not finish spends that attention on work nobody claims is done.
-  it('skips Delivery for a Run that did not complete', () => {
-    const decision = decideDelivery({
-      ...facts,
-      completed: false,
-      incompleteReason: 'the agent failed',
+    ).toMatchObject({
+      outcome: 'nothing-to-deliver',
+      reason: expect.stringContaining('https://gh/pr/1'),
     })
-    expect(decision.outcome).toBe('skipped')
-    expect(decision).toMatchObject({ reason: expect.stringContaining('the agent failed') })
+  })
+})
+
+// The Loop's one human gate is a merge. A pull request from a Run that did not
+// finish spends that attention on work nobody claims is done.
+describe('skippedDelivery', () => {
+  const skipped = skippedDelivery({
+    branch: 'sandcastle/task',
+    base: 'main',
+    reason: 'the agent failed',
   })
 
-  // Distinguishably, which is the whole point of the discriminated outcome: a
-  // flat boolean could not tell these two apart.
-  it('says why it skipped rather than reading as nothing to deliver', () => {
-    const skipped = decideDelivery({ ...facts, completed: false, commitsAhead: 0 })
+  it('says why it skipped, and where the Run’s commits are', () => {
     expect(skipped.outcome).toBe('skipped')
-    expect(decideDelivery({ ...facts, commitsAhead: 0 }).outcome).toBe('nothing-to-deliver')
+    expect(skipped).toMatchObject({
+      branch: 'sandcastle/task',
+      base: 'main',
+      reason: expect.stringContaining('the agent failed'),
+    })
+    expect('reason' in skipped && skipped.reason).toContain('re-dispatch')
+  })
+
+  // Distinguishably, which is the whole point of four outcome tags: a flat
+  // boolean could not tell this from having nothing to deliver.
+  it('is not the same outcome as having nothing to deliver', () => {
+    expect(
+      decideDelivery({
+        branch: 'sandcastle/task',
+        base: 'main',
+        commitsAhead: 0,
+      }).outcome,
+    ).toBe('nothing-to-deliver')
   })
 })
 
@@ -294,7 +282,6 @@ describe('deliver', () => {
     slug: 'o/r',
     branch: 'sandcastle/task',
     base: 'main',
-    completed: true,
     commits: ['aaa1111', 'bbb2222'],
     task: 'Add a health route',
     provenance: { runId: '01JRUN', project: 'todo', target: 'vps', transcript: '/logs/task.log' },
@@ -382,26 +369,6 @@ describe('deliver', () => {
     })
     expect(calls.map((c) => c[0])).not.toContain('push')
     expect(apiCalls).toEqual([LOOKUP])
-  })
-
-  // A Run that did not complete touches nothing at all: its commits survive on
-  // the Task Branch, and re-dispatching continues them.
-  it('touches neither git nor GitHub for a Run that did not complete', async () => {
-    const { git, calls } = fakeGit({})
-    const { github, calls: apiCalls } = fakeGitHub({})
-
-    await expect(
-      deliver(
-        { git, github },
-        { ...input, completed: false, incompleteReason: 'the agent failed' },
-        noSleep,
-      ),
-    ).resolves.toMatchObject({
-      outcome: 'skipped',
-      reason: expect.stringContaining('agent failed'),
-    })
-    expect(calls).toEqual([])
-    expect(apiCalls).toEqual([])
   })
 
   // ADR 0002 forbids re-running the agent, so a transient API error must not be
