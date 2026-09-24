@@ -1,3 +1,4 @@
+import { repoSlug, repoUrl } from '../repo.js'
 import type { Connector } from './connectors/types.js'
 import { composeScript, fail, harnessPort, readEnvScript } from './install.js'
 import { parseProbe } from './preflight.js'
@@ -25,33 +26,6 @@ import { onTargetLoopback } from './verify.js'
 
 /** A repository, as the operator can be expected to name it. */
 export const REPO_PROMPT = 'Repository (owner/name, or an https:// URL)'
-
-/**
- * Turn what the operator typed into a clone URL.
- *
- * HTTPS on the way out whatever came in, including an ssh remote: the Sandbox
- * pushes with the PAT through a credential helper, and an ssh remote inside a
- * Sandbox would need a deploy key this platform does not issue (ADR 0006).
- */
-export const repoUrl = (input: string): string => {
-  const trimmed = input.trim()
-  if (!trimmed) throw new Error('No repository given.')
-  const ssh = /^git@([^:]+):(.+?)(?:\.git)?$/u.exec(trimmed)
-  if (ssh) return `https://${ssh[1]}/${ssh[2]}.git`
-  if (trimmed.startsWith('http://')) {
-    // The clone sends the PAT to this host. Over plain HTTP that is a token in
-    // cleartext on the wire, which is a worse outcome than refusing to start.
-    throw new Error(
-      `Refusing to clone over plain HTTP — the token would travel in the clear:\n${trimmed}`,
-    )
-  }
-  if (trimmed.startsWith('https://')) return trimmed
-  if (/^[\w.-]+\/[\w.-]+$/u.test(trimmed)) return `https://github.com/${trimmed}.git`
-  throw new Error(
-    `Not a repository this recognises: ${trimmed}\n` +
-      'Give it as owner/name, or as a full https:// URL.',
-  )
-}
 
 /**
  * The directory the checkout lands in, which is also the Project's name and
@@ -104,27 +78,6 @@ export const projectScript = (installDir: string, port: number, name: string): s
     installDir,
     `curl -sS -m 10 http://127.0.0.1:${port}/projects/${encodeURIComponent(name)}`,
   )
-
-/**
- * `owner/repo` for a GitHub URL, or `undefined` for anywhere else.
- *
- * Only GitHub can be asked about the token's permissions, so a repository
- * hosted elsewhere skips that check rather than failing it.
- */
-export const repoSlug = (url: string): string | undefined => {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return undefined
-  }
-  if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') return undefined
-  const parts = parsed.pathname
-    .replace(/^\/+/u, '')
-    .replace(/\.git$/u, '')
-    .split('/')
-  return parts.length === 2 && parts[0] && parts[1] ? `${parts[0]}/${parts[1]}` : undefined
-}
 
 /**
  * Whether the Harness's token may *push* to this repository.
