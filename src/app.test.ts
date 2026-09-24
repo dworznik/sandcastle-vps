@@ -4,7 +4,12 @@ import { createApp, type AppDeps } from './app.js'
 const dispatched = () => vi.fn(async () => ({ ids: ['01JQ8ZK0'] }))
 
 const app = (overrides: Partial<AppDeps> = {}) =>
-  createApp({ dispatch: dispatched(), resolveProject: async () => ({}), ...overrides })
+  createApp({
+    dispatch: dispatched(),
+    resolveProject: async () => ({}),
+    listProjects: async () => [],
+    ...overrides,
+  })
 
 const post = (body: unknown, overrides?: Partial<AppDeps>) =>
   app(overrides).request('/dispatch', {
@@ -21,6 +26,62 @@ describe('GET /health', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: 'ok' })
+  })
+})
+
+/**
+ * The Harness's own answer about what it can see. The wizard can read the
+ * Target's disk over the Connector without asking anything; what it cannot
+ * establish that way is whether the path-parity mount and `WORKSPACE_ROOT`
+ * line up well enough for a Dispatch to resolve a checkout — which is the
+ * failure Onboarding needs to catch, and the one this route exists to answer.
+ */
+describe('GET /projects', () => {
+  const summary = {
+    name: 'todo-app',
+    path: '/home/op/work/todo-app',
+    imageName: 'sandcastle:todo-app',
+    onboarded: true,
+  }
+
+  it('lists what the Harness sees under its workspace root', async () => {
+    const response = await app({ listProjects: async () => [summary] }).request('/projects')
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ projects: [summary] })
+  })
+
+  it('answers with an empty list for a Target that has no checkouts yet', async () => {
+    expect(await (await app().request('/projects')).json()).toEqual({ projects: [] })
+  })
+
+  it('answers for one Project by name', async () => {
+    const response = await app({ resolveProject: async () => summary }).request(
+      '/projects/todo-app',
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(summary)
+  })
+
+  // 404 rather than the 400 a Dispatch answers with: this is a question about
+  // whether a Project is there, and "no" is an answer to it rather than a
+  // malformed request.
+  it('answers 404, carrying the reason, for a checkout that was never Onboarded', async () => {
+    const response = await app({
+      resolveProject: async () => {
+        throw new Error('Project "todo-app" has not been Onboarded')
+      },
+    }).request('/projects/todo-app')
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'Project "todo-app" has not been Onboarded' })
+  })
+
+  it('changes nothing — a Dispatch is the only thing that queues a Run', async () => {
+    const dispatch = dispatched()
+    await app({ dispatch, resolveProject: async () => summary }).request('/projects/todo-app')
+    expect(dispatch).not.toHaveBeenCalled()
   })
 })
 

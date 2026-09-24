@@ -4,6 +4,7 @@ import type { Connector, Preflight, PreflightCheck } from './connectors/types.js
 import { captureCredentials, type CaptureResult } from './credentials.js'
 import { composeScript, install } from './install.js'
 import { localShell, type LocalShell } from './local.js'
+import { addProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
 import { createPrompter, type Prompter } from './prompt.js'
@@ -194,7 +195,7 @@ export const afterCredentials = (
       '\nRe-run install/upgrade to finish registering it.'
     )
   }
-  return `\nNext: add a Project. ${notBuiltYet('That', 36)}`
+  return '\nNext: add a Project, from the menu.'
 }
 
 const menu = async (session: Session): Promise<void> => {
@@ -209,7 +210,15 @@ const menu = async (session: Session): Promise<void> => {
     ])
     if (action === 'quit') return
     if (action === 'install') await installUpgrade(session)
-    if (action === 'project') console.log(`\n${notBuiltYet('Adding a Project', 36)}`)
+    if (action === 'project') {
+      const added = await addProject(session)
+      // An Onboarded Project with no image is not a finished one, and saying
+      // nothing would call it done. Not a throw: a Run builds a missing image
+      // itself, so this is a caveat rather than a failure.
+      if (added && !added.imageBuilt) {
+        console.log(`\n${added.name} is Onboarded, but its image is not built.`)
+      }
+    }
     if (action === 'rotate') {
       // Capture and rotation are the same walk over the same questions, and
       // differ only in which of them are asked and whether an existing value

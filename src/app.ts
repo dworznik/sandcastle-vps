@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { env } from './env.js'
 import { sandcastleRun } from './functions/run.js'
 import { inngest, runRequested, runRequestedData } from './inngest.js'
-import { resolveProject } from './projects.js'
+import { listProjects, resolveProject } from './projects.js'
 
 /**
  * The two effects a Dispatch has, injected so the routes can be exercised
@@ -20,11 +20,14 @@ export interface AppDeps {
   ) => Promise<{ readonly ids: readonly string[] }>
   /** Throws when the checkout is missing or was never Onboarded. */
   readonly resolveProject: (project: string) => Promise<unknown>
+  /** Every checkout under the workspace root, Onboarded or not. */
+  readonly listProjects: () => Promise<unknown>
 }
 
 const liveDeps: AppDeps = {
   dispatch: (data) => inngest.send(runRequested.create(data)),
   resolveProject: (project) => resolveProject(env.workspaceRoot, project),
+  listProjects: () => listProjects(env.workspaceRoot),
 }
 
 const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -48,6 +51,33 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
   // below cannot: they answer 401 to anything they cannot verify, which is
   // correct of them and useless as a sign of life.
   app.get('/health', (c) => c.json({ status: 'ok' }))
+
+  /**
+   * What the Harness can see, read-only.
+   *
+   * The Harness's own answer is the one worth having: a checkout is visible on
+   * the Target's disk to anyone with a shell there, but only this process can
+   * say whether the path-parity mount and `WORKSPACE_ROOT` agree well enough
+   * for a Dispatch to resolve it. That is what Onboarding checks when it
+   * finishes, and what a status report asks for.
+   *
+   * Nothing here queues a Run. Confirming that Onboarding worked by dispatching
+   * a real one would start an agent, spend subscription usage, and leave a Task
+   * Branch behind — a side effect nobody asked for, to learn something a
+   * question can answer.
+   */
+  app.get('/projects', async (c) => c.json({ projects: await deps.listProjects() }))
+
+  app.get('/projects/:name', async (c) => {
+    try {
+      return c.json(await deps.resolveProject(c.req.param('name')))
+    } catch (error) {
+      // 404, where a Dispatch answers 400 for the same condition: there, an
+      // unresolvable Project makes the request wrong; here, "it is not there"
+      // is the answer being asked for.
+      return c.json({ error: detail(error) }, 404)
+    }
+  })
 
   /**
    * Keyless Dispatch surface for callers on the Target (loopback) — the

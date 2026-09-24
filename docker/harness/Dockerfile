@@ -46,6 +46,12 @@ RUN if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile --prod; else p
 COPY tsconfig.json ./
 COPY src ./src
 
+# The Sandbox extras fragment, appended to a Project's scaffolded Dockerfile
+# when it is Onboarded. Onboarding runs in this container (#36) — it is where
+# the token, git and the sandcastle CLI already are — so the fragment has to be
+# in the image rather than only in the install directory, which nothing mounts.
+COPY docker/sandbox/extras.Dockerfile ./docker/sandbox/extras.Dockerfile
+
 USER ${OPERATOR_UID}:${OPERATOR_GID}
 
 EXPOSE 3000
