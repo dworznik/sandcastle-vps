@@ -39,6 +39,12 @@ Locally: `pnpm format`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm lint:s
 | `secrets` | a gitleaks scan of the pushed commits             |
 | `commits` | commitlint over the PR title — pull requests only |
 
+### Publishing
+
+`.github/workflows/publish.yml` runs on a pushed `v*` tag. It calls `ci.yml` as a reusable workflow — the same six jobs, not a copy — then `scripts/check-release-tag.sh` refuses a tag whose version is not `package.json`'s or whose commit is not on `main`, and `pnpm publish` runs with `--provenance` and `--skip-manifest-obfuscation`. The latter is load-bearing: pnpm strips `packageManager` from a published manifest by default, and the Harness image build reaches pnpm through corepack, which needs that field.
+
+Authentication is npm trusted publishing (OIDC) with no stored secret. The exception is the first publish of the package, which trusted publishing cannot do because the package does not exist yet: that one uses an `NPM_TOKEN` secret, and the workflow honours it only while it is set. Delete it once the trusted publisher is configured.
+
 ### Formatting
 
 Prettier owns TypeScript, JavaScript, JSON, YAML and Markdown; `node_modules` and `pnpm-lock.yaml` are ignored. `.prettierrc.json`: no semicolons, single quotes, width 100, spaces, `trailingComma: "all"`, `proseWrap: "preserve"`.
