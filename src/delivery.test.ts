@@ -3,6 +3,7 @@ import {
   DELIVERY_BACKOFF_MS,
   decideDelivery,
   deliver,
+  deliveryNote,
   GIT_ASKPASS_SCRIPT,
   pullRequestBody,
   pullRequestTitle,
@@ -444,5 +445,27 @@ describe('deliver', () => {
       }),
     ).rejects.toThrow(/Delivery failed for sandcastle\/task.*permission denied.*aaa1111, bbb2222/s)
     expect(waits).toEqual([...DELIVERY_BACKOFF_MS])
+  })
+})
+
+describe('deliveryNote', () => {
+  const to = { branch: 'sandcastle/task', base: 'main' }
+
+  it('names the pull request when there is one', () => {
+    expect(deliveryNote({ outcome: 'delivered', ...to, pullRequestUrl: 'https://gh/pr/7' })).toBe(
+      'delivered: https://gh/pr/7',
+    )
+    expect(deliveryNote({ outcome: 'updated', ...to, pullRequestUrl: 'https://gh/pr/7' })).toBe(
+      'updated: https://gh/pr/7',
+    )
+  })
+
+  it('names the reason when there is none', () => {
+    expect(deliveryNote({ outcome: 'skipped', ...to, reason: 'the agent failed' })).toBe(
+      'skipped: the agent failed',
+    )
+    expect(
+      deliveryNote({ outcome: 'nothing-to-deliver', ...to, reason: 'not ahead of main' }),
+    ).toBe('nothing-to-deliver: not ahead of main')
   })
 })

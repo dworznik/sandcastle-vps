@@ -357,22 +357,23 @@ export const decideDelivery = (facts: {
   return { outcome: 'delivered' }
 }
 
-/** What a Run reports about its Delivery. Discriminated on `outcome`: there is
- *  a pull request URL exactly when one proposes the branch, and a reason
- *  exactly when none does. */
+interface DeliveredTo {
+  readonly branch: string
+  readonly base: string
+}
+
+/** What a Run reports about its Delivery.
+ *
+ *  Four tags rather than a flag and a URL: a boolean cannot tell "skipped
+ *  because the Run did not complete" from "nothing to deliver", which is
+ *  precisely the confusion Delivery exists to remove. A pull request URL is
+ *  present exactly when one proposes the branch, and a reason exactly when none
+ *  does. */
 export type Delivery =
-  | {
-      readonly outcome: 'delivered' | 'updated'
-      readonly branch: string
-      readonly base: string
-      readonly pullRequestUrl: string
-    }
-  | {
-      readonly outcome: 'nothing-to-deliver' | 'skipped'
-      readonly branch: string
-      readonly base: string
-      readonly reason: string
-    }
+  | ({ readonly outcome: 'delivered'; readonly pullRequestUrl: string } & DeliveredTo)
+  | ({ readonly outcome: 'updated'; readonly pullRequestUrl: string } & DeliveredTo)
+  | ({ readonly outcome: 'nothing-to-deliver'; readonly reason: string } & DeliveredTo)
+  | ({ readonly outcome: 'skipped'; readonly reason: string } & DeliveredTo)
 
 export interface DeliveryProvenance {
   /** The Orchestrator's id for this Run. */
@@ -543,8 +544,11 @@ const deliverOnce = async (ports: DeliveryPorts, input: DeliveryInput): Promise<
     : { commitsAhead: 0, openPullRequestUrl: undefined }
 
   const decision = decideDelivery({ ...input, ...facts })
-  if (decision.outcome === 'skipped' || decision.outcome === 'nothing-to-deliver') {
-    return { outcome: decision.outcome, branch, base, reason: decision.reason }
+  if (decision.outcome === 'skipped') {
+    return { outcome: 'skipped', branch, base, reason: decision.reason }
+  }
+  if (decision.outcome === 'nothing-to-deliver') {
+    return { outcome: 'nothing-to-deliver', branch, base, reason: decision.reason }
   }
 
   // The refspec is explicit so no `push.default` in the Harness's git config can
@@ -617,3 +621,11 @@ export const deliver = async (
     }
   }
 }
+
+/** One line about a Delivery, for a log or a failure message. Either the pull
+ *  request it produced or the reason there is none — the same two cases the
+ *  outcome discriminates, so there is nowhere for a third to hide. */
+export const deliveryNote = (delivery: Delivery): string =>
+  delivery.outcome === 'delivered' || delivery.outcome === 'updated'
+    ? `${delivery.outcome}: ${delivery.pullRequestUrl}`
+    : `${delivery.outcome}: ${delivery.reason}`
