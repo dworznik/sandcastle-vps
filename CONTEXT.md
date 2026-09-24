@@ -38,7 +38,7 @@ The isolated container sandcastle spawns for a single Run, containing the agent 
 
 ### Session
 
-An attended terminal on a Project, in a long-lived container built from that Project's image, where the operator works with their own identity. One per Project; sessions are tmux windows inside it, so they survive a dropped connection. A Session is not a Sandbox — it may start one.
+An attended terminal on a Project, in a long-lived container built from that Project's image, where the operator works directly rather than by Dispatching a Run. One per Project; sessions are tmux windows inside it, so they survive a dropped connection. A Session is not a Sandbox — it may start one. Its commits sign with the agent's key, like a Run's.
 
 ### Loop
 
@@ -66,7 +66,7 @@ A Target that executes Runs and nothing else. It holds agent credentials only, s
 
 ### Workstation Target
 
-A Target that also hosts Sessions. It holds no additional credentials at rest — the operator's identity is forwarded for the life of a connection — but it exposes the Docker socket to session containers, so it is a machine the operator must trust. Enabled deliberately, never by installing.
+A Target that also hosts Sessions. It holds no credentials a Run-only Target does not; what sets it apart is that it exposes the Docker socket to containers built from Projects' own Dockerfiles, which makes it a machine the operator must trust. Enabled deliberately, never by installing.
 
 ### Connector
 
