@@ -39,8 +39,6 @@ Re-running upgrades in place. It is idempotent: an existing `.env` value is seed
 
 **Prerequisites.** Your machine needs Node and `ssh`. The Target needs Docker Engine with the compose plugin, and your user in its `docker` group — the preflight names anything that is missing, and needs nothing else installed: it does not require rsync, curl, or iproute2 on either end.
 
-The Harness has no credentials after an install. Capturing them is not built yet (issue #35); until it is, a Run refuses to start and names what it is short of.
-
 <details>
 <summary>The interim deploy from a checkout</summary>
 
@@ -53,7 +51,20 @@ Superseded by the CLI above and retired by issue #38. It uploads the repo with r
 
 </details>
 
-### 2. Onboard a Project
+### 2. Credentials
+
+The install goes straight on to capturing the agent's identity, because a Harness without it refuses every Run. It asks only for what the Target does not already hold, so an upgrade is silent once they are there.
+
+- **Claude token** — runs `claude setup-token` on your machine when Claude Code is installed there, and reads the token out of its output; otherwise you paste one.
+- **GitHub token** — opens the fine-grained token page and prints the exact permissions a Run needs (Contents, Pull requests and Issues read-write, Metadata read-only, scoped to your Project repos), then verifies what you paste against the API before accepting it. A token GitHub turns down is never written.
+- **Author name and email** — defaulting to your own `git config`. The address has to be one GitHub has verified on your account, or commits arrive unattributed.
+- **Signing key** — a passphraseless ed25519 key generated _on the Target_, so the private half never travels. Its public half is printed, GitHub's key page is opened, and the registration is confirmed through `gh api user/ssh_signing_keys` rather than by taking your word for it. Register it as a **signing** key: the same page adds authentication keys, and one of those signs nothing.
+
+The two tokens are never echoed — not to the terminal, and not into readline's history, where the next prompt's up-arrow would have found them. Nothing asked for here is stored on your machine or passed as a command argument on either end: the environment file travels to the Target over stdin, and the GitHub check puts the token in a header rather than on a `curl` command line. The Target profile holds paths and a host, and never a secret.
+
+The two GitHub pages are the only steps performed by hand. Replacing a credential that is already there is rotation, which is issue #37; re-running install/upgrade fills in whatever is still missing.
+
+### 3. Onboard a Project
 
 A checkout can only receive Runs once it's been Onboarded. On the VPS host:
 
@@ -65,7 +76,7 @@ That scaffolds `.sandcastle/` with the real `sandcastle init`, appends this stac
 
 The token it seeds into `.sandcastle/.env` is no longer read by a Run — credentials are the Harness's now — and both this command and `sync-env` move into the wizard with issues #36 and #38.
 
-### 3. Dispatch a Run
+### 4. Dispatch a Run
 
 On the VPS host:
 
@@ -82,7 +93,7 @@ ssh -L 3000:127.0.0.1:3000 your-vps
 SANDCASTLE_DISPATCH_URL=http://127.0.0.1:3000 sandcastle-run my-app "..."
 ```
 
-### 4. Watch it
+### 5. Watch it
 
 ```bash
 ssh -L 8288:127.0.0.1:8288 your-vps    # then open http://127.0.0.1:8288
