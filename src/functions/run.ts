@@ -2,6 +2,7 @@ import { claudeCode, run } from '@ai-hero/sandcastle'
 import { docker } from '@ai-hero/sandcastle/sandboxes/docker'
 import { agentSandbox } from '../agent.js'
 import { taskBranch, validateBranch } from '../branch.js'
+import { deliveryPorts, projectSlug, recordBase, resolveBase } from '../delivery.js'
 import { env } from '../env.js'
 import { ensureSandboxImage } from '../image.js'
 import { inngest, runRequested } from '../inngest.js'
@@ -26,13 +27,23 @@ export const sandcastleRun = inngest.createFunction(
     const { imageName } = project
 
     // Before the image build, which can take half an hour: a Run that is going
-    // to fail for want of a credential should fail in the first second.
+    // to fail for want of a credential should fail in the first second. The
+    // Base is resolved here for the same reason, and because a Dispatch naming
+    // a Base that conflicts with the Task Branch's is refused rather than run.
     const agent = agentSandbox(env.credentials)
+    const ports = deliveryPorts(project.path, agent.credentials.githubToken)
+    const slug = await projectSlug(ports)
+    const { base, startPoint } = await resolveBase(ports, {
+      slug,
+      branch,
+      requested: event.data.base,
+    })
 
     const { built } = await ensureSandboxImage(project)
     logger.info('starting run', {
       project: project.name,
       branch,
+      base,
       model,
       imageName,
       builtImage: built,
@@ -51,7 +62,13 @@ export const sandcastleRun = inngest.createFunction(
       hooks: agent.hooks,
       // Task Branch only — head/merge-to-head are forbidden on shared
       // checkouts. See ADR 0001.
-      branchStrategy: { type: 'branch', branch },
+      //
+      // `baseBranch` is the freshly fetched remote-tracking ref, so a new Task
+      // Branch is cut from the Base and not from whatever branch the shared
+      // checkout is sitting on. sandcastle ignores it for a branch that already
+      // exists, which is exactly the wanted behaviour on a re-dispatch: the
+      // Task Branch continues rather than being rebased.
+      branchStrategy: { type: 'branch', branch, baseBranch: startPoint },
       name: `${project.name}:${branch}`,
       logging: {
         type: 'file',
@@ -66,9 +83,15 @@ export const sandcastleRun = inngest.createFunction(
       },
     })
 
+    // The branch exists now, so the Base it was cut from can be recorded
+    // against it — which is what lets a re-dispatch continue this Task Branch
+    // without re-resolving, and what makes a conflicting Base refusable.
+    await recordBase(ports, result.branch, base)
+
     return {
       project: project.name,
       branch: result.branch,
+      base,
       commits: result.commits.map((c) => c.sha),
       completionSignal: result.completionSignal,
       logFilePath: result.logFilePath,
