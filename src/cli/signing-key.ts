@@ -70,25 +70,38 @@ export const signingKeyPath = (installDir: string, envContent = ''): string =>
  * a value, the way preflight reports a missing Docker, because the wizard has
  * something useful to say about it and a non-zero exit would only say "failed".
  */
-export const ensureKeyScript = (keyPath: string, comment: string): string => {
+export const ensureKeyScript = (keyPath: string, comment: string, replace = false): string => {
   const key = shellQuote(keyPath)
+  // One interpolation, and the script keeps its own shape: splicing half an
+  // `if` in from one ternary and its `fi` from another left the balance of the
+  // two spread across three places, and nothing here is checked by shellcheck.
   return `set -eu
 umask 077
 key=${key}
+replace=${replace ? 'yes' : 'no'}
 if ! command -v ssh-keygen > /dev/null 2>&1; then
   printf 'error\\tssh-keygen is not on the Target — install the openssh client on it\\n'
   exit 0
 fi
-if [ -f "$key" ]; then
+if [ -f "$key" ] && [ "$replace" != yes ]; then
   state=kept
 else
   mkdir -p "$(dirname "$key")"
+  # Generated beside the key and moved into place, so there is never a moment
+  # with no key at all and a failed rotation leaves the old one working. The
+  # old private half is replaced rather than kept: a retired signing key that
+  # stays on disk is a credential nobody is watching any more.
+  tmp="$key.new.$$"
+  rm -f "$tmp" "$tmp.pub"
   # -N '' is the passphraseless requirement: nothing is at the Target's
   # terminal to type one when a Run signs a commit. < /dev/null so a stray
   # prompt cannot hang the wizard on a connection with no terminal at all.
-  if ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(comment)} -f "$key" < /dev/null; then
+  if ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(comment)} -f "$tmp" < /dev/null; then
+    mv -f "$tmp" "$key"
+    mv -f "$tmp.pub" "$key.pub"
     state=created
   else
+    rm -f "$tmp" "$tmp.pub"
     printf 'error\\tssh-keygen could not write the key\\n'
     exit 0
   fi

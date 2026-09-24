@@ -105,6 +105,16 @@ The Harness logs to its container:
 docker compose logs -f harness    # on the VPS, in ~/.sandcastle-vps
 ```
 
+### 6. Status, and rotating credentials
+
+**Status** answers "what is actually running on this Target, and is it the version I have", and changes nothing — it can be run against a Target mid-Run without thinking about it. Every question goes to whatever owns the answer: the Orchestrator for what synced, the Harness for the Projects it can see, the Target's own kernel for what is listening. It reports the package version on the Target against the CLI's own, which is the usual explanation for "but I fixed that"; which credentials are missing, since a Target can look healthy and still refuse every Run; each Project and whether its image is built; and the containers. Against a Target this CLI has never installed to, it says so plainly instead of failing obscurely.
+
+**Rotate credentials** replaces what the Target already holds. Pick any of the four credentials and the signing key; it re-asks for those, rewrites the environment file, and restarts the Harness. It is one action rather than a walk over every Project, because there is one place credentials live — the retired `sync-env` existed only because there were N copies to keep aligned.
+
+Rotating the signing key regenerates it on the Target and waits for the new one to be registered before finishing. The new key is generated beside the old one and moved into place, so a rotation that fails partway leaves the Target with the key it had. The old private half is then gone, and its registration on GitHub is stale — remove it there once the new one is in.
+
+Rotation is also the way out of a signing key the install refuses to keep: one with a passphrase, or of the wrong type.
+
 ## Development
 
 ```bash
