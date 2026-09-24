@@ -65,11 +65,10 @@ export interface ModelCallCompleted extends StreamEvent {
   readonly usage?: unknown
 }
 
-export type ReducedEvent = StreamEvent
-
 /** Long enough to recognise a command or a path, short enough to never be
- *  the whole of a file write. */
-const INPUT_MAX = 160
+ *  the whole of a file write. The hook command in the Sandbox cuts at the
+ *  same figure. */
+export const INPUT_MAX = 160
 
 const summarise = (value: unknown): string => {
   const text = typeof value === 'string' ? value : JSON.stringify(value)
@@ -103,7 +102,7 @@ export class StreamReducer {
   private invocations = 0
   private results = 0
 
-  constructor(private readonly emit: (event: ReducedEvent) => void) {}
+  constructor(private readonly emit: (event: StreamEvent) => void) {}
 
   push(line: string): void {
     if (!line.startsWith('{')) return
@@ -198,6 +197,7 @@ export class StreamReducer {
         this.emit({
           type: 'subagent.progress',
           task_id: obj.task_id,
+          tool_use_id: obj.tool_use_id,
           tool_uses: usage.tool_uses,
           total_tokens: usage.total_tokens,
           duration_ms: usage.duration_ms,
@@ -305,8 +305,8 @@ export class StreamReducer {
 
 /** Replay a whole stream — a captured file, or a test's lines — and collect
  *  what it reduces to. Ends the stream, so open calls are included. */
-export const reduceStream = (lines: Iterable<string>): ReducedEvent[] => {
-  const events: ReducedEvent[] = []
+export const reduceStream = (lines: Iterable<string>): StreamEvent[] => {
+  const events: StreamEvent[] = []
   const reducer = new StreamReducer((event) => events.push(event))
   for (const line of lines) reducer.push(line)
   reducer.end()

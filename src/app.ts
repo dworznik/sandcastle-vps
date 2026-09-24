@@ -1,16 +1,14 @@
-import { createReadStream } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
-import { Readable } from 'node:stream'
+import { readFile } from 'node:fs/promises'
 import { zValidator } from '@hono/zod-validator'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { serve as serveInngest } from 'inngest/hono'
 import { z } from 'zod'
-import { env } from './env.js'
+import { env, secretValues } from './env.js'
 import { sandcastleRun } from './functions/run.js'
 import { inngest, runRequested, runRequestedData } from './inngest.js'
 import { listProjects, resolveProject } from './projects.js'
-import { locateRun, resolveRunFile, runPageUrl, validateRunId } from './run-logs/run-dir.js'
+import { locateRun, redact, resolveRunFile, runPageUrl, validateRunId } from './run-logs/run-dir.js'
 
 /**
  * The two effects a Dispatch has, injected so the routes can be exercised
@@ -30,6 +28,10 @@ export interface AppDeps {
   readonly locateRun: (id: string) => Promise<string | undefined>
   /** Where the run page for an id is, from the Harness's own port. */
   readonly runPageUrl: (id: string) => string
+  /** The credential values, scrubbed from every served file. A Run writes
+   *  its own files scrubbed already; sandcastle's log is written by
+   *  sandcastle, and this is where it gets the same treatment. */
+  readonly secrets: readonly string[]
 }
 
 const liveDeps: AppDeps = {
@@ -38,6 +40,7 @@ const liveDeps: AppDeps = {
   listProjects: () => listProjects(env.workspaceRoot),
   locateRun: (id) => locateRun(env.workspaceRoot, id),
   runPageUrl: (id) => runPageUrl(env.port, id),
+  secrets: secretValues(env.credentials),
 }
 
 const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -152,36 +155,32 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
    * tails `events.jsonl` itself and says so until it appears. The files are
    * served only once they exist, and only the ones a Run writes.
    */
-  const page = async (c: { readonly req: { param: (name: string) => string } }) => {
-    if (!isRunId(c.req.param('id'))) return undefined
-    return loadRunPage()
-  }
-  app.get('/runs/:id', async (c) => {
-    const html = await page(c)
-    return html === undefined ? c.json({ error: 'Not a run id' }, 404) : c.html(html)
-  })
+  const servePage = async (c: Context) =>
+    isRunId(c.req.param('id') ?? '')
+      ? c.html(await loadRunPage())
+      : c.json({ error: 'Not a run id' }, 404)
+  app.get('/runs/:id', servePage)
   app.get('/runs/:id/*', async (c) => {
     const id = c.req.param('id')
     const rest = c.req.path.slice(`/runs/${id}/`.length)
-    if (rest === '') {
-      const html = await page(c)
-      return html === undefined ? c.json({ error: 'Not a run id' }, 404) : c.html(html)
-    }
+    if (rest === '') return servePage(c)
     if (!isRunId(id)) return c.json({ error: 'Not a run id' }, 404)
     const dir = await deps.locateRun(id)
     if (!dir) return c.json({ error: `No Run ${id}` }, 404)
     const file = resolveRunFile(dir, rest)
     if (!file) return c.json({ error: `No such file in Run ${id}` }, 404)
+    let content: string
     try {
-      await stat(file.path)
+      content = await readFile(file.path, 'utf8')
     } catch {
       return c.json({ error: `Run ${id} has not written ${rest}` }, 404)
     }
-    // Streamed rather than read whole: a transcript or a raw stream can run
-    // to megabytes, and the page fetches the events file every two seconds.
+    // Read whole rather than streamed, so a secret cannot straddle two
+    // chunks and slip past the scrub. These files run to megabytes at most,
+    // on loopback.
     c.header('content-type', file.contentType)
     c.header('cache-control', 'no-store')
-    return c.body(Readable.toWeb(createReadStream(file.path)) as ReadableStream)
+    return c.body(redact(content, deps.secrets))
   })
 
   // The Orchestrator's side of the same server: sync, introspection, and the

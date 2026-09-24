@@ -530,6 +530,7 @@
           const cost = results.length ? results[results.length - 1].total_cost_usd : undefined
           const rate = [...events].reverse().find((e) => e.type === 'rate_limit')
           const started = events.find((e) => e.type === 'run.started')
+          const base = events.find((e) => e.type === 'base.resolved')
           const ended = events.find((e) => e.type === 'run.finished' || e.type === 'run.failed')
           const agent = events.find((e) => e.type === 'agent.finished')
           const delivery = events.find((e) => e.type === 'delivery.finished')
@@ -544,6 +545,7 @@
             cost,
             rate,
             started,
+            base,
             ended,
             agent,
             delivery,
@@ -566,6 +568,7 @@
           if (s.started) {
             if (s.started.project) meta.push(`project <b>${esc(s.started.project)}</b>`)
             if (s.started.branch) meta.push(`branch <b>${esc(s.started.branch)}</b>`)
+            if (s.base) meta.push(`base <b>${esc(s.base.base)}</b>`)
             meta.push(`model <b>${esc(s.started.model || '')}</b>`)
             if (s.started.run_id) meta.push(`orchestrator run <b>${esc(s.started.run_id)}</b>`)
           }
@@ -637,7 +640,7 @@
                 : ''
             return {
               cls: 'hook' + (e.agent_id ? ' nested' : ''),
-              kind: ev,
+              kind: esc(ev),
               html: `${tool}${agent}${extra}${arg}`,
             }
           }
@@ -656,7 +659,7 @@
               return {
                 cls: `call${nested ? ' nested sub' : ''}${err ? ' err' : ''}`,
                 kind: nested ? 'subagent call' : 'model call',
-                n: `#${e.index}`,
+                n: `#${num(e.index || 0)}`,
                 html: `${toolChips(e.tool_uses)}${text}${stop}${arg}`,
               }
             }
@@ -672,7 +675,7 @@
                 cls: 'sub nested progress',
                 kind: 'progress',
                 task: e.task_id,
-                html: `<span class="text">${e.tool_uses || 0} tool uses · ${num(e.total_tokens || 0)} tokens · ${secs(e.duration_ms || 0)}</span>${e.last_tool_name ? ` <span class="chip sub">${esc(e.last_tool_name)}</span>` : ''}`,
+                html: `<span class="text">${num(e.tool_uses || 0)} tool uses · ${num(e.total_tokens || 0)} tokens · ${secs(e.duration_ms || 0)}</span>${e.last_tool_name ? ` <span class="chip sub">${esc(e.last_tool_name)}</span>` : ''}`,
               }
             case 'subagent.finished':
               return {
@@ -684,20 +687,20 @@
               return {
                 cls: 'phase',
                 kind: 'session',
-                html: `<span class="text">Claude Code session started</span> <span class="id">${esc(String(e.session_id || '').slice(0, 8))} · ${esc(e.model || '')} · ${e.tools || '?'} tools</span>`,
+                html: `<span class="text">Claude Code session started</span> <span class="id">${esc(String(e.session_id || '').slice(0, 8))} · ${esc(e.model || '')} · ${num(e.tools || 0)} tools</span>`,
               }
             case 'session.resumed':
               return {
                 cls: 'phase',
                 kind: 'session',
-                html: `<span class="text">Session resumed</span> <span class="id">invocation ${e.invocation}, woken by a subagent result</span>`,
+                html: `<span class="text">Session resumed</span> <span class="id">invocation ${num(e.invocation || 0)}, woken by a subagent result</span>`,
               }
             case 'invocation.finished': {
               const u = e.usage || {}
               return {
                 cls: 'phase',
                 kind: 'result',
-                html: `<span class="text">Invocation ${e.invocation} ${esc(e.subtype || '')}</span> <span class="id">${e.num_turns || 0} turns · ${num(u.output_tokens || 0)} out · ${num(u.cache_read_input_tokens || 0)} cached in · api ${secs(e.duration_api_ms || 0)}</span>`,
+                html: `<span class="text">Invocation ${num(e.invocation || 0)} ${esc(e.subtype || '')}</span> <span class="id">${num(e.num_turns || 0)} turns · ${num(u.output_tokens || 0)} out · ${num(u.cache_read_input_tokens || 0)} cached in · api ${secs(e.duration_api_ms || 0)}</span>`,
               }
             }
             case 'rate_limit': {
@@ -725,7 +728,13 @@
               return {
                 cls: 'phase',
                 kind: 'harness',
-                html: `<span class="text">Run started on ${esc(e.branch || '')}</span> <span class="id">${esc(e.project || '')} · base ${esc(e.base || '')}</span> <span class="arg">${esc(e.task || '')}</span>`,
+                html: `<span class="text">Run started on ${esc(e.branch || '')}</span> <span class="id">${esc(e.project || '')}</span> <span class="arg">${esc(e.task || '')}</span>`,
+              }
+            case 'base.resolved':
+              return {
+                cls: 'phase',
+                kind: 'harness',
+                html: `<span class="text">Base resolved: ${esc(e.base || '')}</span> <span class="id">${esc(e.start_point || '')}</span>`,
               }
             case 'image.ready':
               return {
@@ -787,14 +796,14 @@
         const expanded = new Set()
         const progressCount = {}
 
-        const applyFilters = () => {
+        const applyFilters = (rows = document.querySelectorAll('.row')) => {
           const show = {
             calls: $('f-calls').checked,
             hooks: $('f-hooks').checked,
             subs: $('f-subs').checked,
             sys: $('f-sys').checked,
           }
-          for (const row of document.querySelectorAll('.row')) {
+          for (const row of rows) {
             const c = row.classList
             let visible = true
             if (c.contains('sys')) visible = show.sys
@@ -808,7 +817,7 @@
           }
         }
         for (const id of ['f-calls', 'f-hooks', 'f-subs', 'f-sys'])
-          $(id).addEventListener('change', applyFilters)
+          $(id).addEventListener('change', () => applyFilters())
 
         const updateExpanders = () => {
           for (const button of document.querySelectorAll('.expander')) {
@@ -827,7 +836,7 @@
             if (expanded.has(task)) expanded.delete(task)
             else expanded.add(task)
             updateExpanders()
-            applyFilters()
+            applyFilters(document.querySelectorAll('.row.progress'))
             return
           }
           const row = ev.target.closest('.row')
@@ -862,13 +871,14 @@
               if (e.type === 'subagent.progress' && e.task_id)
                 progressCount[e.task_id] = (progressCount[e.task_id] || 0) + 1
             }
+            const before = tl.childElementCount
             tl.insertAdjacentHTML(
               'beforeend',
               fresh.map((e, k) => rowHtml(e, rendered + k)).join(''),
             )
             rendered = events.length
             updateExpanders()
-            applyFilters()
+            applyFilters([...tl.children].slice(before))
           }
           return s
         }

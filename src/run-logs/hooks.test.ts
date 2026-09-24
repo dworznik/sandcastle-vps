@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { INPUT_MAX } from './reducer.js'
 import {
   HOOK_COMMAND,
   HOOK_EVENTS,
@@ -39,7 +40,9 @@ describe('HOOK_COMMAND', () => {
   // The two payload fields that can be arbitrarily large are cut down in the
   // hook itself, so a line is one line and no file write travels whole.
   it('reduces the payload in the hook rather than copying it', () => {
-    expect(HOOK_COMMAND).toContain('tool_input: ((.tool_input // null) | tojson | .[0:160])')
+    expect(HOOK_COMMAND).toContain(
+      `tool_input: ((.tool_input // null) | tojson | .[0:${INPUT_MAX}])`,
+    )
     expect(HOOK_COMMAND).toContain('response_bytes: ((.tool_response // null) | tojson | length)')
   })
 

@@ -14,13 +14,13 @@ import {
   recordBase,
   resolveBase,
 } from '../delivery.js'
-import { env } from '../env.js'
+import { env, secretValues } from '../env.js'
 import { deliveryPorts } from '../delivery-ports.js'
 import { errorDetail } from '../errors.js'
 import { ensureSandboxImage } from '../image.js'
 import { inngest, runRequested, type runRequestedData } from '../inngest.js'
-import { resolveProject } from '../projects.js'
-import { openRunLog, runPageUrl, type RunLog } from '../run-logs/run-dir.js'
+import { resolveProject, type Project } from '../projects.js'
+import { openRunLog, type RunLog } from '../run-logs/run-dir.js'
 
 export const sandcastleRun = inngest.createFunction(
   {
@@ -38,16 +38,20 @@ export const sandcastleRun = inngest.createFunction(
     // The run directory, before anything else that can fail: a Run that dies
     // in its first second still has a place that says so. Keyed by the id the
     // Dispatch answered with, so the link handed out then points here.
-    const log = await openRunLog({ projectPath: project.path, id: event.id ?? runId, runId })
-    const url = runPageUrl(env.port, log.id)
-    const startedAt = Date.now()
+    const log = await openRunLog({
+      projectPath: project.path,
+      id: event.id ?? runId,
+      runId,
+      port: env.port,
+      secrets: secretValues(env.credentials),
+    })
     try {
-      return await execute({ event, logger, runId }, project, log, url, startedAt)
+      return await execute({ event, logger, runId }, project, log)
     } catch (cause) {
       const error = errorDetail(cause)
-      log.harness('run.failed', { error, duration_ms: Date.now() - startedAt })
+      log.harness('run.failed', { error, duration_ms: Date.now() - log.openedAt })
       // A thrown Run has no result to carry the link, so its message does.
-      throw new Error(`${error}\n\nRun logs: ${url}`, { cause })
+      throw new Error(`${error}\n\nRun logs: ${log.url}`, { cause })
     } finally {
       await log.close()
     }
@@ -62,13 +66,7 @@ interface RunContext {
   readonly runId: string
 }
 
-const execute = async (
-  { event, logger, runId }: RunContext,
-  project: Awaited<ReturnType<typeof resolveProject>>,
-  log: RunLog,
-  url: string,
-  startedAt: number,
-) => {
+const execute = async ({ event, logger, runId }: RunContext, project: Project, log: RunLog) => {
   const branch = event.data.branch ? validateBranch(event.data.branch) : taskBranch(event.data.task)
   const model = event.data.model ?? env.defaultModel
   const { imageName } = project
@@ -115,7 +113,7 @@ const execute = async (
     model,
     imageName,
     builtImage: built,
-    logs: url,
+    logs: log.url,
   })
 
   const provenance = {
@@ -126,7 +124,7 @@ const execute = async (
     // process. Good enough to tell two Targets' pull requests apart, which is
     // all a reviewer needs it for.
     target: hostname(),
-    logs: url,
+    logs: log.url,
   }
 
   /** Everything a Delivery of this Run needs that is known before it runs. */
@@ -250,7 +248,7 @@ const execute = async (
     ...('pullRequestUrl' in delivery ? { pull_request_url: delivery.pullRequestUrl } : {}),
     ...('reason' in delivery ? { reason: delivery.reason } : {}),
   })
-  log.harness('run.finished', { duration_ms: Date.now() - startedAt })
+  log.harness('run.finished', { duration_ms: Date.now() - log.openedAt })
 
   return {
     project: project.name,
@@ -264,7 +262,7 @@ const execute = async (
     // The link the Orchestrator's run page shows, and where the files are on
     // the Target. The tail is the last of `events.jsonl`, capped, so a glance
     // at the result says how the Run ended without opening the page.
-    logs: { url, dir: log.dir },
+    logs: { url: log.url, dir: log.dir },
     tail: await log.tail(),
   }
 }

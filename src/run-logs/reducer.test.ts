@@ -73,6 +73,18 @@ describe('reduceStream over a captured subagent run', () => {
     ])
   })
 
+  // The usage on an `assistant` line is the message-start snapshot: a
+  // handful of output tokens per call, against a result total in the
+  // thousands. Kept as what it is, and never presented as the real figure.
+  it('carries per-call usage as the snapshot it is, not as the real output figure', () => {
+    const outputs = calls.map((c) => (c.usage as { output_tokens: number }).output_tokens)
+    expect(outputs.every((n) => n <= 16)).toBe(true)
+    const total = ofType('invocation.finished').map(
+      (r) => (r.usage as { output_tokens: number }).output_tokens,
+    )
+    expect(Math.max(...total)).toBeGreaterThan(1000)
+  })
+
   it('truncates tool input, so a secret-carrying argument is never copied whole', () => {
     for (const use of calls.flatMap((c) => c.tool_uses)) {
       expect(use.input.length).toBeLessThanOrEqual(160)
@@ -105,7 +117,9 @@ describe('reduceStream over a captured subagent run', () => {
       }),
     ])
     expect(ofType('subagent.progress').length).toBeGreaterThan(0)
-    for (const p of ofType('subagent.progress')) expect(p.task_id).toBe(TASK)
+    for (const p of ofType('subagent.progress')) {
+      expect(p).toEqual(expect.objectContaining({ task_id: TASK, tool_use_id: AGENT_CALL }))
+    }
   })
 
   it("surfaces the subscription's windows from the rate limit line", () => {

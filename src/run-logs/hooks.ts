@@ -12,6 +12,8 @@
  * about observation lands in the Project or depends on workspace trust.
  */
 
+import { INPUT_MAX } from './reducer.js'
+
 /**
  * Where the Sandbox sees the hooks file. Only the file is mounted, not the
  * run directory: the agent gets to append its own account and nothing else,
@@ -22,10 +24,6 @@
  * creates parents only under the Sandbox home.
  */
 export const SANDBOX_HOOKS_FILE = '/home/agent/.sandcastle-run/hooks.jsonl'
-
-/** Long enough to recognise a command or a path, short enough to never be
- *  the whole of a file write. The reducer's own cap is the same figure. */
-const INPUT_MAX = 160
 
 /**
  * The hook command, run with the event's JSON on stdin. It keeps the fields

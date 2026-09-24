@@ -13,6 +13,7 @@ const app = (overrides: Partial<AppDeps> = {}) =>
     listProjects: async () => [],
     locateRun: async () => undefined,
     runPageUrl: (id) => `http://127.0.0.1:3000/runs/${id}`,
+    secrets: ['sk-ant-oat01-fixture-token'],
     ...overrides,
   })
 
@@ -194,7 +195,9 @@ describe('GET /runs', () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'sandcastle-app-'))
     await writeFile(join(dir, 'events.jsonl'), '{"type":"run.started"}\n')
-    await writeFile(join(dir, 'sandcastle.log'), 'started\n')
+    // sandcastle writes this one itself, so it is the file only the route
+    // can scrub. Token-shaped and under 80 characters, per .gitleaks.toml.
+    await writeFile(join(dir, 'sandcastle.log'), 'started\n$ echo sk-ant-oat01-fixture-token\n')
     await mkdir(join(dir, 'session', 'subagents'), { recursive: true })
     await writeFile(join(dir, 'session', 'sess-1.jsonl'), '{"type":"user"}\n')
     await writeFile(join(dir, 'session', 'subagents', 'agent-a1.jsonl'), '{}\n')
@@ -232,7 +235,14 @@ describe('GET /runs', () => {
     const response = await located().request('/runs/01K5A/sandcastle.log')
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
-    expect(await response.text()).toBe('started\n')
+    expect(await response.text()).toBe('started\n$ echo [redacted]\n')
+  })
+
+  // The Run scrubs what it writes; sandcastle's own log is written by
+  // sandcastle, so the route is the one place every served file goes through.
+  it('scrubs the Harness’s secrets from whatever it serves', async () => {
+    const text = await (await located().request('/runs/01K5A/sandcastle.log')).text()
+    expect(text).not.toContain('sk-ant-oat01-fixture-token')
   })
 
   it('serves the transcript and the subagent transcripts under session/', async () => {

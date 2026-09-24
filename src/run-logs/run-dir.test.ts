@@ -12,15 +12,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  REDACTED,
   RUN_FILES,
   TAIL_CAP_BYTES,
   locateRun,
   openRunLog,
+  redact,
   resolveRunFile,
   runPageUrl,
   validateRunId,
   type RunLog,
 } from './run-dir.js'
+
+/** Token-shaped and under 80 characters, so `.gitleaks.toml` stays silent. */
+const TOKEN = 'sk-ant-oat01-fixture-token'
+const open = (id: string, runId = 'run-1') =>
+  openRunLog({ projectPath: project, id, runId, port: 3000, secrets: [TOKEN] })
 
 let workspace: string
 let project: string
@@ -64,8 +71,9 @@ describe('runPageUrl', () => {
 
 describe('openRunLog', () => {
   it('creates the run directory with every file a Run writes, empty', async () => {
-    const log = await openRunLog({ projectPath: project, id: '01K5A', runId: 'run-1' })
+    const log = await open('01K5A')
     expect(log.dir).toBe(join(project, '.sandcastle', 'runs', '01K5A'))
+    expect(log.url).toBe('http://127.0.0.1:3000/runs/01K5A')
     expect((await readdir(log.dir)).sort()).toEqual([...RUN_FILES].sort())
     for (const file of RUN_FILES) expect((await stat(join(log.dir, file))).size).toBe(0)
     await log.close()
@@ -74,18 +82,17 @@ describe('openRunLog', () => {
   // A rerun of the same Dispatch from the Orchestrator's dashboard is the one
   // way two Runs share an id; the second gets a directory of its own.
   it('gives a second Run of the same Dispatch its own directory', async () => {
-    const first = await openRunLog({ projectPath: project, id: '01K5A', runId: 'run-1' })
+    const first = await open('01K5A')
     await first.close()
-    const second = await openRunLog({ projectPath: project, id: '01K5A', runId: 'run-2' })
+    const second = await open('01K5A', 'run-2')
     expect(second.id).toBe('01K5A-run-2')
     expect(second.dir).toBe(join(project, '.sandcastle', 'runs', '01K5A-run-2'))
+    expect(second.url).toBe('http://127.0.0.1:3000/runs/01K5A-run-2')
     await second.close()
   })
 
   it('refuses an id that is not a path segment before touching the disk', async () => {
-    await expect(
-      openRunLog({ projectPath: project, id: '../etc', runId: 'run-1' }),
-    ).rejects.toThrow(/run id/u)
+    await expect(open('../etc')).rejects.toThrow(/run id/u)
   })
 })
 
@@ -93,7 +100,7 @@ describe('RunLog', () => {
   let log: RunLog
 
   beforeEach(async () => {
-    log = await openRunLog({ projectPath: project, id: '01K5B', runId: 'run-1' })
+    log = await open('01K5B')
   })
 
   afterEach(async () => {
@@ -122,6 +129,29 @@ describe('RunLog', () => {
     expect(events).toEqual([
       expect.objectContaining({ source: 'stream', type: 'session.started', session_id: 's1' }),
     ])
+  })
+
+  // The agent can print the Harness's tokens — `env`, `echo $GH_TOKEN` — and
+  // the raw stream carries tool output whole. Served to a browser, so no.
+  it('scrubs the Harness’s secrets from the raw stream before writing it', async () => {
+    log.stream(JSON.stringify({ type: 'user', message: { content: `token=${TOKEN}` } }))
+    const raw = await readFile(join(log.dir, 'stream.jsonl'), 'utf8')
+    expect(raw).not.toContain(TOKEN)
+    expect(raw).toContain(REDACTED)
+  })
+
+  it('scrubs the transcript and the subagent transcripts as it copies them', async () => {
+    const home = join(workspace, 'home')
+    await mkdir(join(home, 'sess-3', 'subagents'), { recursive: true })
+    await writeFile(join(home, 'sess-3.jsonl'), `{"out":"${TOKEN}"}\n`)
+    await writeFile(join(home, 'sess-3', 'subagents', 'agent-b.jsonl'), `{"out":"${TOKEN}"}\n`)
+    await log.captureSession(join(home, 'sess-3.jsonl'))
+    expect(await readFile(join(log.dir, 'session', 'sess-3.jsonl'), 'utf8')).toBe(
+      `{"out":"${REDACTED}"}\n`,
+    )
+    expect(await readFile(join(log.dir, 'session', 'subagents', 'agent-b.jsonl'), 'utf8')).toBe(
+      `{"out":"${REDACTED}"}\n`,
+    )
   })
 
   // The hooks file is appended to from inside the Sandbox; the log tails it
@@ -197,7 +227,7 @@ describe('RunLog', () => {
 
 describe('locateRun', () => {
   it('finds the run directory under whichever Project holds it', async () => {
-    const log = await openRunLog({ projectPath: project, id: '01K5C', runId: 'run-1' })
+    const log = await open('01K5C')
     await log.close()
     expect(await locateRun(workspace, '01K5C')).toBe(log.dir)
   })
@@ -247,5 +277,18 @@ describe('resolveRunFile', () => {
     ]) {
       expect(resolveRunFile(dir, file)).toBeUndefined()
     }
+  })
+})
+
+describe('redact', () => {
+  it('replaces every occurrence of each secret, and nothing else', () => {
+    expect(redact(`a ${TOKEN} b ${TOKEN} c ghp_x`, [TOKEN, 'ghp_x'])).toBe(
+      `a ${REDACTED} b ${REDACTED} c ${REDACTED}`,
+    )
+  })
+
+  it('leaves text alone when there is nothing to scrub', () => {
+    expect(redact('plain', [])).toBe('plain')
+    expect(redact('plain', [''])).toBe('plain')
   })
 })

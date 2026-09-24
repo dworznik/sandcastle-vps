@@ -1,5 +1,5 @@
 import { appendFileSync } from 'node:fs'
-import { cp, mkdir, open, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { listProjects } from '../projects.js'
 import { StreamReducer, type StreamEvent } from './reducer.js'
@@ -80,7 +80,9 @@ const exists = async (path: string): Promise<boolean> => {
 class HookTail {
   private offset = 0
   private partial = ''
-  private busy = false
+  /** The drain in flight, if one is: `stop()` waits for it rather than
+   *  reading the same offset twice. */
+  private inFlight: Promise<void> | undefined
   private timer: NodeJS.Timeout | undefined
 
   constructor(
@@ -93,14 +95,13 @@ class HookTail {
   start(): void {
     if (this.timer) return
     this.timer = setInterval(() => {
-      if (this.busy) return
-      this.busy = true
-      void this.drain()
+      if (this.inFlight) return
+      this.inFlight = this.drain()
         .catch((error: unknown) => {
           this.onError(error)
         })
         .finally(() => {
-          this.busy = false
+          this.inFlight = undefined
         })
     }, HOOK_POLL_MS)
   }
@@ -109,6 +110,7 @@ class HookTail {
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer)
     this.timer = undefined
+    await this.inFlight
     await this.drain()
   }
 
@@ -142,12 +144,20 @@ export class RunLog {
   private readonly events: string
   private readonly reducer: StreamReducer
   private readonly hooks: HookTail
+  /** When the log was opened, which is when the Run began. */
+  readonly openedAt = Date.now()
 
   constructor(
     /** The id the directory is named by — the Dispatch's, or the Dispatch's
      *  with the run id appended when that directory was already taken. */
     readonly id: string,
     readonly dir: string,
+    /** The run page for this log, on the Harness's own port. */
+    readonly url: string,
+    /** The Harness's credential values. The agent can print them — `env`,
+     *  `echo $GH_TOKEN` — and the raw stream and the transcript carry tool
+     *  output whole, so both are redacted before they are written. */
+    private readonly secrets: readonly string[],
   ) {
     this.events = join(dir, 'events.jsonl')
     this.reducer = new StreamReducer((event) => this.append('stream', event))
@@ -176,11 +186,12 @@ export class RunLog {
     this.append('harness', { type, ...data })
   }
 
-  /** One raw line of the agent's `stream-json` output: kept verbatim, and
-   *  reduced into events. */
+  /** One raw line of the agent's `stream-json` output: kept verbatim but for
+   *  the Harness's own secrets, and reduced into events. */
   stream(line: string): void {
-    appendFileSync(join(this.dir, 'stream.jsonl'), `${line}\n`)
-    this.reducer.push(line)
+    const clean = redact(line, this.secrets)
+    appendFileSync(join(this.dir, 'stream.jsonl'), `${clean}\n`)
+    this.reducer.push(clean)
   }
 
   /** Start merging the Sandbox's hook lines into the events. */
@@ -196,12 +207,19 @@ export class RunLog {
   async captureSession(sessionFilePath: string): Promise<void> {
     const session = join(this.dir, 'session')
     await mkdir(session, { recursive: true })
-    await cp(sessionFilePath, join(session, basename(sessionFilePath)))
+    await this.copyRedacted(sessionFilePath, join(session, basename(sessionFilePath)))
     const id = basename(sessionFilePath, '.jsonl')
     const subagents = join(dirname(sessionFilePath), id, 'subagents')
-    if (await exists(subagents)) {
-      await cp(subagents, join(session, 'subagents'), { recursive: true })
+    if (!(await exists(subagents))) return
+    await mkdir(join(session, 'subagents'), { recursive: true })
+    for (const entry of await readdir(subagents, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      await this.copyRedacted(join(subagents, entry.name), join(session, 'subagents', entry.name))
     }
+  }
+
+  private async copyRedacted(from: string, to: string): Promise<void> {
+    await writeFile(to, redact(await readFile(from, 'utf8'), this.secrets))
   }
 
   /** The last events, capped by size, for the Run's result. */
@@ -237,11 +255,26 @@ export class RunLog {
     await this.hooks.stop()
   }
 
+  // Synchronous appends, deliberately: three sources write `events.jsonl`,
+  // and the order the lines land in is the order the page shows them in. A
+  // queue of async writes would need its own ordering, for lines that are
+  // small and a process that runs one Run per Project.
   private append(source: EventSource, event: StreamEvent): void {
     const { type, ...data } = event
     const line: RunEvent = { t: new Date().toISOString(), ...data, source, type }
     appendFileSync(this.events, `${JSON.stringify(line)}\n`)
   }
+}
+
+/** What a secret is written as, wherever one was. */
+export const REDACTED = '[redacted]'
+
+/** Replace every occurrence of each secret. The values are exact strings —
+ *  tokens, not patterns — so this is a plain replacement. */
+export const redact = (text: string, secrets: readonly string[]): string => {
+  let clean = text
+  for (const secret of secrets) if (secret) clean = clean.replaceAll(secret, REDACTED)
+  return clean
 }
 
 /**
@@ -256,6 +289,10 @@ export const openRunLog = async (input: {
   readonly id: string
   /** The Orchestrator's id for this invocation of the function. */
   readonly runId: string
+  /** The Harness's own port, for the run page URL. */
+  readonly port: number
+  /** The credential values to keep out of what is written. */
+  readonly secrets: readonly string[]
 }): Promise<RunLog> => {
   const dispatched = validateRunId(input.id)
   const runs = join(input.projectPath, RUNS_DIR)
@@ -266,7 +303,7 @@ export const openRunLog = async (input: {
   const dir = join(runs, id)
   await mkdir(dir, { recursive: true })
   await Promise.all(RUN_FILES.map((file) => writeFile(join(dir, file), '', { flag: 'a' })))
-  return new RunLog(id, dir)
+  return new RunLog(id, dir, runPageUrl(input.port, id), input.secrets)
 }
 
 /**
