@@ -37,10 +37,27 @@
  *        (scaffold, image, run, result), which is where a Harness would also
  *        put Delivery.
  *
+ *        Subagents, from a run that delegated research to one: Claude Code
+ *        runs them in the background. The Agent tool returns at once with a
+ *        launch acknowledgement, the parent keeps working (and may schedule
+ *        a wake-up and stop), and the child's completion arrives as a
+ *        `task_notification` system line that re-invokes the parent with a
+ *        fresh `init`. The child's own lines carry `parent_tool_use_id` and
+ *        interleave with the parent's; `task_started` / `task_progress` /
+ *        `task_notification` carry the task id, which is the same id the
+ *        hooks report as `agent_id`, so the two sources correlate. The
+ *        child's transcript is captured to the host beside the session's,
+ *        under `<session>/subagents/agent-<id>.jsonl`.
+ *
+ *        Also on the stream: `rate_limit_event` lines with the subscription's
+ *        five-hour and seven-day window utilisation. Surfaced as
+ *        `rate_limit`, because that is the input a Limit Gate wants.
+ *
  * Human-readable progress goes to stderr; stdout is JSONL only, so the output
- * pipes straight into `jq` or a file. The full stream-json also lands in the
- * Run's log under the project's `.sandcastle/logs/`, and the hook lines under
- * `.sandcastle/poc-events/<stamp>/`, so nothing here is the only copy.
+ * pipes straight into `jq` or a file. The verbatim stream and the hook lines
+ * both land under the project's `.sandcastle/poc-events/<stamp>/`, and
+ * `--replay <stream.jsonl>` re-runs the reducer over a captured stream with
+ * no Sandbox, so a reducer change is checked against the last real run.
  *
  * Credentials: the Claude subscription, never the API. The Sandbox receives
  * exactly one variable, `CLAUDE_CODE_OAUTH_TOKEN`, through the docker
@@ -53,7 +70,7 @@
  */
 import { execFile } from 'node:child_process'
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
-import { existsSync, writeSync } from 'node:fs'
+import { appendFileSync, existsSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -203,10 +220,18 @@ const HOOK_COMMAND =
   `jq -c '{t: (now | todate), event: .hook_event_name, session_id, tool_name, tool_use_id, ` +
   `tool_input: ((.tool_input // null) | tojson | .[0:160]), ` +
   `response_bytes: ((.tool_response // null) | tojson | length), ` +
-  `start_source: .source, end_reason: .reason} | with_entries(select(.value != null))' ` +
+  `start_source: .source, end_reason: .reason, agent_id, agent_type} | with_entries(select(.value != null))' ` +
   `>> ${SANDBOX_EVENTS_DIR}/${HOOKS_FILE}`
 
-const HOOK_EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd']
+const HOOK_EVENTS = [
+  'SessionStart',
+  'PreToolUse',
+  'PostToolUse',
+  'SubagentStart',
+  'SubagentStop',
+  'Stop',
+  'SessionEnd',
+]
 
 const hookSettings = (): string =>
   JSON.stringify({
@@ -310,13 +335,31 @@ const summarise = (value: unknown): string => {
  *
  * The stream carries one `assistant` line per content block, all sharing the
  * message id of the call that produced them, then a `user` line with the
- * tool results. A call is complete only when the next call starts or the
- * `result` line arrives, because its results trail it — so that is when the
- * event is emitted.
+ * tool results. A call is complete only when the next call on the same
+ * thread starts or a `result` line arrives, because its results trail it —
+ * so that is when the event is emitted.
+ *
+ * Threads: a subagent's lines carry `parent_tool_use_id`, the Agent call that
+ * spawned it, and interleave with the parent's. Subagents run in the
+ * background, so the parent keeps issuing calls while the child works, and
+ * the child's blocks for one message can arrive minutes apart. Open calls are
+ * therefore kept per message and closed per thread, never on a global "last
+ * message" rule — the first version of this did that and split one subagent
+ * call in two.
+ *
+ * Invocations: a session whose subagent finishes after the parent stopped is
+ * woken up again with a task notification. Each wake-up is a fresh
+ * `system/init` line and, at the very end, its own `result` line. The
+ * session id stays the same; the session's hooks fire SessionEnd once.
  */
 class ModelCallReducer {
-  private pending: ModelCall | undefined
+  /** Open calls by message id. */
+  private open = new Map<string, ModelCall>()
+  /** The open message on each thread, by parent tool-use id (null = main). */
+  private current = new Map<string | null, string>()
   private count = 0
+  private invocations = 0
+  private results = 0
 
   push(line: string): void {
     if (!line.startsWith('{')) return
@@ -337,8 +380,13 @@ class ModelCallReducer {
         this.user(obj)
         return
       case 'result':
-        this.flush()
-        emit('stream', 'session.finished', {
+        this.flushAll()
+        // Numbered on their own: every invocation's `result` line arrives
+        // together at the end of the session, after the last `init`, so the
+        // invocation counter would stamp all of them with the last number.
+        this.results += 1
+        emit('stream', 'invocation.finished', {
+          invocation: this.results,
           subtype: obj.subtype,
           is_error: obj.is_error,
           num_turns: obj.num_turns,
@@ -348,6 +396,21 @@ class ModelCallReducer {
           usage: obj.usage,
         })
         return
+      case 'rate_limit_event': {
+        // The subscription's own windows, reported by Claude Code on every
+        // run. This is the signal a Limit Gate would want, and it arrives for
+        // free on the stream rather than needing to be inferred from failures.
+        const info = (obj.rate_limit_info ?? {}) as Record<string, unknown>
+        const windows = (info.unifiedWindows ?? {}) as Record<string, Record<string, unknown>>
+        emit('stream', 'rate_limit', {
+          status: info.status,
+          window: info.rateLimitType,
+          resets_at: info.resetsAt,
+          five_hour: windows.five_hour,
+          seven_day: windows.seven_day,
+        })
+        return
+      }
       default:
         emit('stream', 'other', { line_type: obj.type, subtype: obj.subtype })
     }
@@ -355,8 +418,10 @@ class ModelCallReducer {
 
   private system(obj: Record<string, unknown>): void {
     if (obj.subtype === 'init') {
+      this.invocations += 1
       const tools = Array.isArray(obj.tools) ? obj.tools.length : undefined
-      emit('stream', 'session.started', {
+      emit('stream', this.invocations === 1 ? 'session.started' : 'session.resumed', {
+        invocation: this.invocations,
         session_id: obj.session_id,
         model: obj.model,
         cwd: obj.cwd,
@@ -364,26 +429,70 @@ class ModelCallReducer {
       })
       return
     }
-    emit('stream', 'system', { subtype: obj.subtype })
+    // A background subagent is a "task" to the stream: started with the Agent
+    // call's tool-use id and its own task id (the same id the hooks report as
+    // `agent_id`), progress with running totals, and a notification when it
+    // is done — which is also the moment its thread can be closed, since its
+    // final message has no successor to close it.
+    switch (obj.subtype) {
+      case 'task_started':
+        emit('stream', 'subagent.started', {
+          task_id: obj.task_id,
+          tool_use_id: obj.tool_use_id,
+          subagent_type: obj.subagent_type,
+          description: obj.description,
+          backgrounded: obj.is_backgrounded,
+        })
+        return
+      case 'task_progress': {
+        const usage = (obj.usage ?? {}) as Record<string, unknown>
+        emit('stream', 'subagent.progress', {
+          task_id: obj.task_id,
+          tool_uses: usage.tool_uses,
+          total_tokens: usage.total_tokens,
+          duration_ms: usage.duration_ms,
+          last_tool_name: obj.last_tool_name,
+        })
+        return
+      }
+      case 'task_notification': {
+        const parent = typeof obj.tool_use_id === 'string' ? obj.tool_use_id : undefined
+        const open = parent === undefined ? undefined : this.current.get(parent)
+        if (open !== undefined) this.flush(open)
+        emit('stream', 'subagent.finished', {
+          task_id: obj.task_id,
+          tool_use_id: obj.tool_use_id,
+          status: obj.status,
+          summary_chars: typeof obj.summary === 'string' ? obj.summary.length : undefined,
+        })
+        return
+      }
+      default:
+        emit('stream', 'system', { subtype: obj.subtype })
+    }
   }
 
   private assistant(obj: Record<string, unknown>): void {
     const message = (obj.message ?? {}) as Record<string, unknown>
     const id = typeof message.id === 'string' ? message.id : `anon-${this.count}`
-    if (this.pending?.message_id !== id) {
-      this.flush()
+    const thread = typeof obj.parent_tool_use_id === 'string' ? obj.parent_tool_use_id : null
+    let call = this.open.get(id)
+    if (!call) {
+      // A new message on this thread closes the thread's previous one.
+      const previous = this.current.get(thread)
+      if (previous !== undefined && previous !== id) this.flush(previous)
       this.count += 1
-      this.pending = {
+      call = {
         index: this.count,
         message_id: id,
-        parent_tool_use_id:
-          typeof obj.parent_tool_use_id === 'string' ? obj.parent_tool_use_id : null,
+        parent_tool_use_id: thread,
         model: typeof message.model === 'string' ? message.model : undefined,
         text_chars: 0,
         tool_uses: [],
       }
+      this.open.set(id, call)
+      this.current.set(thread, id)
     }
-    const call = this.pending
     if (typeof message.stop_reason === 'string') call.stop_reason = message.stop_reason
     if (message.usage !== undefined) call.usage = message.usage
     const content = Array.isArray(message.content) ? message.content : []
@@ -405,7 +514,13 @@ class ModelCallReducer {
     const content = Array.isArray(message.content) ? message.content : []
     for (const block of content as Record<string, unknown>[]) {
       if (block.type !== 'tool_result') continue
-      const use = this.pending?.tool_uses.find((u) => u.id === block.tool_use_id)
+      // Whichever open call issued it — the Agent call's own result lands
+      // long after the parent has moved on to other messages.
+      let use: ToolUse | undefined
+      for (const call of this.open.values()) {
+        use = call.tool_uses.find((u) => u.id === block.tool_use_id)
+        if (use) break
+      }
       if (!use) continue
       use.is_error = block.is_error === true
       const body = block.content
@@ -418,10 +533,19 @@ class ModelCallReducer {
     }
   }
 
-  private flush(): void {
-    if (!this.pending) return
-    emit('stream', 'model_call.completed', { ...this.pending })
-    this.pending = undefined
+  private flush(messageId: string): void {
+    const call = this.open.get(messageId)
+    if (!call) return
+    emit('stream', 'model_call.completed', { ...call })
+    this.open.delete(messageId)
+    if (this.current.get(call.parent_tool_use_id) === messageId) {
+      this.current.delete(call.parent_tool_use_id)
+    }
+  }
+
+  private flushAll(): void {
+    // Deleting the current key while iterating a Map is defined behaviour.
+    for (const id of this.open.keys()) this.flush(id)
   }
 }
 
@@ -463,7 +587,8 @@ const subscriptionToken = async (): Promise<SubscriptionToken | undefined> => {
 
 const usage = (): never => {
   say(
-    'Usage: pnpm tsx scripts/poc/agent-events.ts "<feature prompt>" [--model <id>] [--name <project>] [--workspace <dir>]',
+    'Usage: pnpm tsx scripts/poc/agent-events.ts "<feature prompt>" [--model <id>] [--name <project>] [--workspace <dir>]\n' +
+      '       pnpm tsx scripts/poc/agent-events.ts --replay <poc-events/<stamp>/stream.jsonl>',
   )
   process.exit(2)
 }
@@ -475,8 +600,18 @@ const main = async (): Promise<void> => {
       model: { type: 'string', default: process.env.AGENT_MODEL ?? 'claude-sonnet-5' },
       name: { type: 'string', default: 'python-feature' },
       workspace: { type: 'string' },
+      replay: { type: 'string' },
     },
   })
+
+  // Re-run the reducer over a captured raw stream, with no Sandbox and no
+  // agent. A reducer change is checked against the last real run this way.
+  if (values.replay) {
+    const reducer = new ModelCallReducer()
+    for (const line of (await readFile(values.replay, 'utf8')).split('\n')) reducer.push(line)
+    return
+  }
+
   const feature = positionals.join(' ').trim()
   if (!feature) usage()
 
@@ -526,6 +661,7 @@ const main = async (): Promise<void> => {
   })
 
   const reducer = new ModelCallReducer()
+  const rawPath = join(eventsDir, 'stream.jsonl')
   say(`branch    ${branch}`)
   say(`model     ${values.model}`)
   say(`log       ${logPath}`)
@@ -548,7 +684,12 @@ const main = async (): Promise<void> => {
         type: 'file',
         path: logPath,
         onAgentStreamEvent: (event: AgentStreamEvent) => {
-          if (event.type === 'raw') reducer.push(event.line)
+          if (event.type !== 'raw') return
+          // The verbatim stream, kept beside the hook lines: sandcastle's own
+          // log file renders it rather than storing it, and a reducer is only
+          // as good as the raw lines one can check it against.
+          appendFileSync(rawPath, `${event.line}\n`)
+          reducer.push(event.line)
         },
       },
     })
