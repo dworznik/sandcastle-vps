@@ -6,11 +6,11 @@
 # watch progress in the Inngest dashboard or wait for the Task Branch.
 #
 # Usage:
-#   sandcastle-run <project> <task...> [--branch <name>] [--model <model>]
+#   sandcastle-run <project> <task...> [--branch <name>] [--base <name>] [--model <model>]
 set -euo pipefail
 
 usage() {
-  echo "Usage: sandcastle-run <project> <task...> [--branch <name>] [--model <model>]" >&2
+  echo "Usage: sandcastle-run <project> <task...> [--branch <name>] [--base <name>] [--model <model>]" >&2
   exit 1
 }
 
@@ -20,6 +20,10 @@ project="$1"
 shift
 
 branch=""
+# The Base: what the Task Branch is cut from and what its pull request is
+# proposed against. Left empty, the Harness resolves the Project remote's
+# default branch.
+base=""
 model=""
 task_parts=()
 while [ $# -gt 0 ]; do
@@ -27,6 +31,11 @@ while [ $# -gt 0 ]; do
     --branch)
       [ $# -ge 2 ] || usage
       branch="$2"
+      shift 2
+      ;;
+    --base)
+      [ $# -ge 2 ] || usage
+      base="$2"
       shift 2
       ;;
     --model)
@@ -48,9 +57,11 @@ payload="$(jq -n \
   --arg project "$project" \
   --arg task "$task" \
   --arg branch "$branch" \
+  --arg base "$base" \
   --arg model "$model" \
   '{project: $project, task: $task}
    + (if $branch != "" then {branch: $branch} else {} end)
+   + (if $base != "" then {base: $base} else {} end)
    + (if $model != "" then {model: $model} else {} end)')"
 
 dispatch_urls=()

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { errorDetail } from './errors.js'
 import type { Project } from './projects.js'
 
 const exec = promisify(execFile)
@@ -23,12 +24,14 @@ export interface ImageTools {
 const sandcastleCli = (): string =>
   join(dirname(fileURLToPath(import.meta.resolve('@ai-hero/sandcastle'))), 'main.js')
 
-const errorDetail = (error: unknown): string => {
+/** A failed build says what went wrong on stderr; anything else falls back to
+ *  the shared reading of a cause. */
+const buildDetail = (error: unknown): string => {
   if (error && typeof error === 'object' && 'stderr' in error) {
     const stderr = String(error.stderr).trim()
     if (stderr) return stderr
   }
-  return error instanceof Error ? error.message : String(error)
+  return errorDetail(error)
 }
 
 export const dockerImageTools: ImageTools = {
@@ -73,7 +76,7 @@ export const ensureSandboxImage = async (
     await tools.buildImage(project)
   } catch (cause) {
     throw new Error(
-      `Failed to build image ${project.imageName} for Project "${project.name}": ${errorDetail(cause)}`,
+      `Failed to build image ${project.imageName} for Project "${project.name}": ${buildDetail(cause)}`,
       { cause },
     )
   }

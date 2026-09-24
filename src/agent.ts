@@ -50,6 +50,10 @@ export interface AgentSandbox {
   readonly env: Readonly<Record<string, string>>
   readonly mounts: readonly Mount[]
   readonly hooks: SandboxHooks
+  /** The identity, whole — established by this function refusing to return
+   *  without it. A Run needs the token for its own work as well as the
+   *  Sandbox's: Delivery pushes and opens the pull request from the Harness. */
+  readonly credentials: AgentCredentials
 }
 
 /** Every credential, in the order they are reported in — which is the order
@@ -106,5 +110,6 @@ export const agentSandbox = (
       { hostPath: complete.signingKeyPath, sandboxPath: SANDBOX_SIGNING_KEY_PATH, readonly: true },
     ],
     hooks: { sandbox: { onSandboxReady: [{ command: GIT_SETUP_COMMAND }] } },
+    credentials: complete,
   }
 }
