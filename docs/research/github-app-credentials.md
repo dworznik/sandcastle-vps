@@ -14,13 +14,13 @@ changelog, so the ADR can take positions on facts rather than assumptions.
 
 ## Summary of verdicts
 
-| Question                                  | Verdict                                                                                                                                                                         |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Multiple concurrent private keys       | Yes, up to 25; the docs do not say what deleting a key does to tokens already minted, and treat key deletion and token revocation as separate remedies.                         |
-| 2. Rate limit: per installation or token  | The budget is the installation's, 5,000/hr scaling by repos and users to a 12,500 cap (15,000 flat on Enterprise Cloud); no figure is documented for JWT-authenticated calls.   |
-| 3. Repo creation under a personal account | Not with an installation token: `POST /user/repos` accepts user access tokens and fine-grained PATs only; `POST /orgs/{org}/repos` accepts all three with Administration write. |
-| 4. App name rules                         | 34 characters, unique across GitHub, may not collide with an account you do not own, changeable later; slug-on-rename and `[bot]` removal are not documented.                   |
-| 5. Mint-time narrowing                    | Yes: `repositories`/`repository_ids` (up to 500) and `permissions`, never above the installation's grant; 1 hour lifetime; revocable with `DELETE /installation/token`.         |
+| Question                                  | Verdict                                                                                                                                                                             |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Multiple concurrent private keys       | Yes, up to 25; the docs do not say what deleting a key does to tokens already minted (that it only stops future minting is an inference), and every key reaches every installation. |
+| 2. Rate limit: per installation or token  | Assigned to the installation, 5,000/hr scaling by repos and users to a 12,500 cap (15,000 flat on Enterprise Cloud); one shared pool is the reading, not a quote; no JWT figure.    |
+| 3. Repo creation under a personal account | Not with an installation token: `POST /user/repos` accepts user access tokens and fine-grained PATs only; `POST /orgs/{org}/repos` accepts all three with Administration write.     |
+| 4. App name rules                         | 34 characters, unique across GitHub, may not collide with an account you do not own, changeable later; slug-on-rename and `[bot]` removal are not documented.                       |
+| 5. Mint-time narrowing                    | Yes: `repositories`/`repository_ids` (up to 500) and `permissions`, never above the installation's grant; 1 hour lifetime; revocable with `DELETE /installation/token`.             |
 
 ## 1. Multiple concurrent private keys per App
 
@@ -67,10 +67,10 @@ private keys that are no longer in use" ([Best practices][best]); the changelog 
 reason for the cap: "sharing keys among multiple parties is not recommended, which an
 unlimited number of keys lead developers towards" ([changelog, 2024-11-08][cl-keys]).
 
-**Verdict:** An App can hold up to 25 keys at once, but the docs do not say that deleting
-one invalidates tokens already minted through it, and they treat key deletion and token
-revocation as separate remedies, so revoking a Target by deleting its key only stops
-future minting.
+**Verdict:** An App can hold up to 25 keys at once. Whether deleting one invalidates tokens
+already minted through it, the docs do not say; that it only stops future minting is an
+inference from the separate remedies they prescribe, and every key reaches every
+installation regardless.
 
 **Sources:** [Managing private keys][keys], [Generating a JWT][jwt], [Best
 practices][best], [changelog, 2024-11-08][cl-keys], [changelog, 2026-04-24][cl-stateless]
@@ -120,9 +120,10 @@ every caller: 100 concurrent requests, 900 points per minute per endpoint, and "
 than 80 content-generating requests per minute and no more than 500 content-generating
 requests per hour".
 
-**Verdict:** The primary budget is the installation's (5,000/hr, +50 per repository and
-+50 per user beyond 20 each, capped at 12,500; 15,000 flat on Enterprise Cloud), so
-everything minted from one installation draws on one pool, and no figure is documented for
+**Verdict:** The primary budget is assigned to the installation (5,000/hr, +50 per
+repository and +50 per user beyond 20 each, capped at 12,500; 15,000 flat on Enterprise
+Cloud). That everything minted from one installation draws on one pool is the plain reading
+of that wording, not a sentence the docs contain, and no figure is documented for
 JWT-authenticated calls.
 
 **Sources:** [REST API rate limits][limits], [Rate limits for GitHub Apps][app-limits]
@@ -299,8 +300,10 @@ Scoring #69's assumptions:
   prescribe token revocation as a separate step. Worse for the design, every key "grants
   access to every account that the app is installed on", so a key is not a per-Target
   credential at all; and the docs say not to generate more keys than needed.
-- (b) Rate limits per installation: held. Targets sharing one installation share one
-  budget; a Target on a different account has its own installation and its own budget.
+- (b) Rate limits per installation: held as far as the docs go, which assign the limit to
+  the installation without saying "shared" outright. On that reading Targets sharing one
+  installation share one budget; a Target on a different account has its own installation
+  and its own budget.
 - (c) Org creation via installation token with Administration write, user creation not:
   held. The corollary "so repos must live in an org" holds for the installation-token
   path only; a fine-grained PAT or a user access token can create user-owned repos, and
