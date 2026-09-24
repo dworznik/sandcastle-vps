@@ -42,13 +42,19 @@
  * Run's log under the project's `.sandcastle/logs/`, and the hook lines under
  * `.sandcastle/poc-events/<stamp>/`, so nothing here is the only copy.
  *
- * Credentials: `CLAUDE_CODE_OAUTH_TOKEN` if set, else `ANTHROPIC_API_KEY`,
- * passed into the Sandbox through the docker provider's env, the same channel
- * the Harness uses. Nothing is written into the scratch project.
+ * Credentials: the Claude subscription, never the API. The Sandbox receives
+ * exactly one variable, `CLAUDE_CODE_OAUTH_TOKEN`, through the docker
+ * provider's env — the same channel the Harness uses. It comes from the
+ * environment if set (`claude setup-token` mints a long-lived one), else from
+ * the access token Claude Code keeps in `~/.claude/.credentials.json` on this
+ * machine. An `ANTHROPIC_API_KEY` in the environment is ignored and cannot
+ * reach the Sandbox: sandcastle forwards host variables only when a
+ * `.sandcastle/.env` names them, and the scratch project has none.
  */
 import { execFile } from 'node:child_process'
-import { mkdir, open, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import { existsSync, writeSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs, promisify } from 'node:util'
@@ -419,6 +425,40 @@ class ModelCallReducer {
   }
 }
 
+// ------------------------------------------------------------ credential
+
+interface SubscriptionToken {
+  readonly value: string
+  /** Where it came from, for the progress line — never the value itself. */
+  readonly source: string
+}
+
+/**
+ * The subscription's OAuth token, and only that. `CLAUDE_CODE_OAUTH_TOKEN` in
+ * the environment wins; otherwise the access token from the Claude Code login
+ * on this machine, if it has not expired. There is deliberately no API-key
+ * path: a Run on this platform spends subscription usage, never credit.
+ */
+const subscriptionToken = async (): Promise<SubscriptionToken | undefined> => {
+  const fromEnv = process.env.CLAUDE_CODE_OAUTH_TOKEN
+  if (fromEnv) return { value: fromEnv, source: 'CLAUDE_CODE_OAUTH_TOKEN' }
+  const file = join(homedir(), '.claude', '.credentials.json')
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as {
+      claudeAiOauth?: { accessToken?: string; expiresAt?: number }
+    }
+    const oauth = parsed.claudeAiOauth
+    if (!oauth?.accessToken) return undefined
+    if (typeof oauth.expiresAt === 'number' && oauth.expiresAt <= Date.now()) {
+      say(`The login in ${file} has expired; run \`claude\` to refresh it.`)
+      return undefined
+    }
+    return { value: oauth.accessToken, source: `${file} (claude login)` }
+  } catch {
+    return undefined
+  }
+}
+
 // ---------------------------------------------------------------- main
 
 const usage = (): never => {
@@ -448,15 +488,16 @@ const main = async (): Promise<void> => {
   const path = join(workspace, values.name)
   const project = { name: values.name, path, imageName: defaultImageName(path) }
 
-  const credentials: Record<string, string> = process.env.CLAUDE_CODE_OAUTH_TOKEN
-    ? { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }
-    : process.env.ANTHROPIC_API_KEY
-      ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
-      : {}
-  if (Object.keys(credentials).length === 0) {
-    say('Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY for the agent.')
+  const token = await subscriptionToken()
+  if (!token) {
+    say(
+      'No Claude subscription token. Run `claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN, ' +
+        'or log in with `claude` on this machine. This tool never uses an API key.',
+    )
     process.exit(2)
   }
+  say(`token     ${token.source}`)
+  const credentials = { CLAUDE_CODE_OAUTH_TOKEN: token.value }
 
   const stamp = new Date()
     .toISOString()
