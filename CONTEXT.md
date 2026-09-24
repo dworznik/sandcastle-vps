@@ -22,7 +22,7 @@ The component that queues Dispatches, enforces concurrency limits, and records R
 
 ### Project
 
-A git checkout on the VPS, under the workspace root, that has been Onboarded. Only Projects can be targeted by a Run. Each Project owns its Sandbox definition and credentials — there is no shared fallback.
+A git checkout on the VPS, under the workspace root, that has been Onboarded. Only Projects can be targeted by a Run. Each Project owns its Sandbox definition — there is no shared fallback.
 
 ### Onboarding
 
@@ -34,7 +34,11 @@ The named git branch where a Run's commits land. Agent work only ever becomes vi
 
 ### Sandbox
 
-The isolated container sandcastle spawns for a single Run, containing the agent (Claude Code) and the Project's worktree. Ephemeral — exists only for the duration of the Run — and built from the Project's own image, never a shared one.
+The isolated container sandcastle spawns for a single Run, containing the agent (Claude Code) and the Project's worktree. Ephemeral — exists only for the duration of the Run — and built from the Project's own image, never a shared one. Distinct from a Session, which is attended and outlives any one agent invocation.
+
+### Session
+
+An attended terminal on a Project, in a long-lived container built from that Project's image, where the operator works with their own identity. One per Project; sessions are tmux windows inside it, so they survive a dropped connection. A Session is not a Sandbox — it may start one.
 
 ### Loop
 
@@ -55,6 +59,14 @@ Machine-specific settings kept out of version control. Two layers: the Target pr
 ### Target
 
 A machine or container engine the platform is installed on — a VPS, an OrbStack machine, the operator's own Docker Desktop — reached only through a Connector. The Harness, the Orchestrator, the workspace root and the credentials all live on the Target.
+
+### Run-only Target
+
+A Target that executes Runs and nothing else. It holds agent credentials only, so the worst a compromise yields is push access to the Projects. What a default install produces.
+
+### Workstation Target
+
+A Target that also hosts Sessions. It holds no additional credentials at rest — the operator's identity is forwarded for the life of a connection — but it exposes the Docker socket to session containers, so it is a machine the operator must trust. Enabled deliberately, never by installing.
 
 ### Connector
 
