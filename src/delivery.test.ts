@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { GIT_ASKPASS_SCRIPT, recordBase, resolveBase, type DeliveryPorts } from './delivery.js'
+import {
+  DELIVERY_BACKOFF_MS,
+  decideDelivery,
+  deliver,
+  GIT_ASKPASS_SCRIPT,
+  pullRequestBody,
+  pullRequestTitle,
+  recordBase,
+  resolveBase,
+  type DeliveryPorts,
+} from './delivery.js'
 
 /**
  * A git that answers only what a test registered, keyed by the command line it
@@ -20,13 +30,15 @@ const fakeGit = (answers: Record<string, { code?: number; stdout?: string; stder
 
 const fakeGitHub = (answers: Record<string, { status: number; body: unknown }>) => {
   const calls: string[] = []
-  const github: DeliveryPorts['github'] = async ({ method, path }) => {
+  const sent: unknown[] = []
+  const github: DeliveryPorts['github'] = async ({ method, path, body }) => {
     calls.push(`${method} ${path}`)
+    if (body !== undefined) sent.push(body)
     const answer = answers[`${method} ${path}`]
     if (!answer) throw new Error(`no answer registered for: ${method} ${path}`)
     return answer
   }
-  return { github, calls }
+  return { github, calls, sent }
 }
 
 const FETCH = 'fetch --quiet origin'
@@ -157,5 +169,280 @@ describe('GIT_ASKPASS_SCRIPT', () => {
   // script that answered both the same way would send the token as a username.
   it('tells the two prompts apart', () => {
     expect(GIT_ASKPASS_SCRIPT).toContain('case "$1" in')
+  })
+})
+
+describe('decideDelivery', () => {
+  const facts = {
+    branch: 'sandcastle/task',
+    base: 'main',
+    completed: true,
+    commitsAhead: 2,
+    openPullRequestUrl: undefined,
+  }
+
+  it('proposes the Task Branch when it is ahead of its Base and nothing proposes it yet', () => {
+    expect(decideDelivery(facts)).toEqual({ outcome: 'delivered' })
+  })
+
+  // Re-dispatching to a Task Branch is the documented way to iterate, so the
+  // second Run must land in the pull request the first one opened.
+  it('updates the open pull request rather than opening a second one', () => {
+    expect(decideDelivery({ ...facts, openPullRequestUrl: 'https://gh/pr/1' })).toEqual({
+      outcome: 'updated',
+      pullRequestUrl: 'https://gh/pr/1',
+    })
+  })
+
+  // "Nothing to deliver" is about the branch, not about this Run: a re-dispatch
+  // that added no commits still has work to report if an earlier Run left some.
+  it('reports the open pull request even when this Run added nothing itself', () => {
+    expect(
+      decideDelivery({ ...facts, commitsAhead: 1, openPullRequestUrl: 'https://gh/pr/1' }),
+    ).toMatchObject({ outcome: 'updated' })
+  })
+
+  it('has nothing to deliver when the Task Branch is not ahead of its Base', () => {
+    const decision = decideDelivery({ ...facts, commitsAhead: 0 })
+    expect(decision.outcome).toBe('nothing-to-deliver')
+    expect(decision).toMatchObject({ reason: expect.stringContaining('not ahead of main') })
+  })
+
+  // A pull request that proposes nothing is not a pull request worth reporting
+  // as live work, so the branch's position decides before its pull request does.
+  it('still has nothing to deliver when a stale pull request is open', () => {
+    expect(
+      decideDelivery({ ...facts, commitsAhead: 0, openPullRequestUrl: 'https://gh/pr/1' }),
+    ).toMatchObject({ outcome: 'nothing-to-deliver' })
+  })
+
+  // The Loop's one human gate is a merge. A pull request from a Run that did
+  // not finish spends that attention on work nobody claims is done.
+  it('skips Delivery for a Run that did not complete', () => {
+    const decision = decideDelivery({
+      ...facts,
+      completed: false,
+      incompleteReason: 'the agent failed',
+    })
+    expect(decision.outcome).toBe('skipped')
+    expect(decision).toMatchObject({ reason: expect.stringContaining('the agent failed') })
+  })
+
+  // Distinguishably, which is the whole point of the discriminated outcome: a
+  // flat boolean could not tell these two apart.
+  it('says why it skipped rather than reading as nothing to deliver', () => {
+    const skipped = decideDelivery({ ...facts, completed: false, commitsAhead: 0 })
+    expect(skipped.outcome).toBe('skipped')
+    expect(decideDelivery({ ...facts, commitsAhead: 0 }).outcome).toBe('nothing-to-deliver')
+  })
+})
+
+describe('pullRequestTitle', () => {
+  // The agent had to satisfy the Project's own commit conventions to commit at
+  // all, so its subject is the one string on hand known to pass that repo's
+  // title lint.
+  it('takes the first commit’s subject', () => {
+    expect(pullRequestTitle('feat(api): add a health route', 'add a health route please')).toBe(
+      'feat(api): add a health route',
+    )
+  })
+
+  it('falls back to the task text only when there is no usable subject', () => {
+    expect(pullRequestTitle(undefined, 'Add a health\n  route')).toBe('Add a health route')
+    expect(pullRequestTitle('   ', 'Add a health route')).toBe('Add a health route')
+  })
+
+  it('truncates a task long enough to blow a title cap', () => {
+    const title = pullRequestTitle(undefined, 'x'.repeat(200))
+    expect(title.length).toBeLessThanOrEqual(72)
+  })
+})
+
+describe('pullRequestBody', () => {
+  const body = pullRequestBody({
+    task: 'Add a health route',
+    base: 'main',
+    provenance: {
+      runId: '01JRUN',
+      project: 'todo',
+      target: 'sandcastle-vps',
+      transcript: '/work/todo/.sandcastle/logs/sandcastle-task.log',
+    },
+  })
+
+  it('carries the task text verbatim, which is what the agent was asked for', () => {
+    expect(body).toContain('Add a health route')
+  })
+
+  it('carries the Run’s provenance, so a reviewer can find what produced it', () => {
+    expect(body).toContain('01JRUN')
+    expect(body).toContain('todo')
+    expect(body).toContain('sandcastle-vps')
+    expect(body).toContain('/work/todo/.sandcastle/logs/sandcastle-task.log')
+  })
+})
+
+describe('deliver', () => {
+  const AHEAD = 'rev-list --count refs/remotes/origin/main..refs/heads/sandcastle/task'
+  const SUBJECTS = 'log --reverse --format=%s refs/remotes/origin/main..refs/heads/sandcastle/task'
+  const PUSH = 'push origin refs/heads/sandcastle/task:refs/heads/sandcastle/task'
+  const LOOKUP = 'GET /repos/o/r/pulls?state=open&head=o%3Asandcastle%2Ftask&per_page=1'
+  const CREATE = 'POST /repos/o/r/pulls'
+
+  const input = {
+    slug: 'o/r',
+    branch: 'sandcastle/task',
+    base: 'main',
+    completed: true,
+    commits: ['aaa1111', 'bbb2222'],
+    task: 'Add a health route',
+    provenance: { runId: '01JRUN', project: 'todo', target: 'vps', transcript: '/logs/task.log' },
+  }
+
+  /** No waiting in tests; the backoff itself is asserted separately. */
+  const noSleep = async () => {}
+
+  it('pushes the Task Branch and opens a pull request against its Base', async () => {
+    const { git, calls } = fakeGit({
+      [AHEAD]: { stdout: '2' },
+      [SUBJECTS]: { stdout: 'feat(api): add a health route\nfix: typo' },
+      [PUSH]: {},
+    })
+    const { github, sent } = fakeGitHub({
+      [LOOKUP]: { status: 200, body: [] },
+      [CREATE]: { status: 201, body: { html_url: 'https://gh/pr/7' } },
+    })
+
+    await expect(deliver({ git, github }, input, noSleep)).resolves.toEqual({
+      outcome: 'delivered',
+      branch: 'sandcastle/task',
+      base: 'main',
+      pullRequestUrl: 'https://gh/pr/7',
+    })
+    expect(calls).toContainEqual([
+      'push',
+      'origin',
+      'refs/heads/sandcastle/task:refs/heads/sandcastle/task',
+    ])
+    expect(sent).toEqual([
+      {
+        title: 'feat(api): add a health route',
+        body: expect.stringContaining('Add a health route'),
+        head: 'sandcastle/task',
+        base: 'main',
+      },
+    ])
+  })
+
+  it('pushes and reports the existing pull request on a re-dispatch', async () => {
+    const { git } = fakeGit({ [AHEAD]: { stdout: '3' }, [PUSH]: {} })
+    const { github, calls } = fakeGitHub({
+      [LOOKUP]: { status: 200, body: [{ html_url: 'https://gh/pr/7' }] },
+    })
+
+    await expect(deliver({ git, github }, input, noSleep)).resolves.toEqual({
+      outcome: 'updated',
+      branch: 'sandcastle/task',
+      base: 'main',
+      pullRequestUrl: 'https://gh/pr/7',
+    })
+    // No POST: a second pull request for the same head is the thing this avoids.
+    expect(calls).toEqual([LOOKUP])
+  })
+
+  // Task Branch names are derived from task text and truncated, so name reuse
+  // across time is expected. Reopening a merged pull request would re-propose
+  // commits the Base already has, so only an *open* one counts as existing.
+  it('opens a fresh pull request when the branch’s previous one was merged', async () => {
+    const { git } = fakeGit({
+      [AHEAD]: { stdout: '1' },
+      [SUBJECTS]: { stdout: 'feat: again' },
+      [PUSH]: {},
+    })
+    const { github, calls } = fakeGitHub({
+      [LOOKUP]: { status: 200, body: [] },
+      [CREATE]: { status: 201, body: { html_url: 'https://gh/pr/9' } },
+    })
+
+    await expect(deliver({ git, github }, input, noSleep)).resolves.toMatchObject({
+      outcome: 'delivered',
+      pullRequestUrl: 'https://gh/pr/9',
+    })
+    expect(calls).toEqual([LOOKUP, CREATE])
+  })
+
+  it('neither pushes nor opens anything when the branch is not ahead of its Base', async () => {
+    const { git, calls } = fakeGit({ [AHEAD]: { stdout: '0' } })
+    const { github, calls: apiCalls } = fakeGitHub({ [LOOKUP]: { status: 200, body: [] } })
+
+    await expect(deliver({ git, github }, input, noSleep)).resolves.toMatchObject({
+      outcome: 'nothing-to-deliver',
+      reason: expect.stringContaining('not ahead of main'),
+    })
+    expect(calls.map((c) => c[0])).not.toContain('push')
+    expect(apiCalls).toEqual([LOOKUP])
+  })
+
+  // A Run that did not complete touches nothing at all: its commits survive on
+  // the Task Branch, and re-dispatching continues them.
+  it('touches neither git nor GitHub for a Run that did not complete', async () => {
+    const { git, calls } = fakeGit({})
+    const { github, calls: apiCalls } = fakeGitHub({})
+
+    await expect(
+      deliver(
+        { git, github },
+        { ...input, completed: false, incompleteReason: 'the agent failed' },
+        noSleep,
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'skipped',
+      reason: expect.stringContaining('agent failed'),
+    })
+    expect(calls).toEqual([])
+    expect(apiCalls).toEqual([])
+  })
+
+  // ADR 0002 forbids re-running the agent, so a transient API error must not be
+  // allowed to discard twenty minutes of quota-burning work.
+  it('retries a transient failure rather than losing the Run’s work', async () => {
+    let attempts = 0
+    const git: DeliveryPorts['git'] = async (args) => {
+      if (args[0] === 'rev-list') {
+        attempts += 1
+        if (attempts === 1) return { code: 128, stdout: '', stderr: 'the remote hung up' }
+        return { code: 0, stdout: '1', stderr: '' }
+      }
+      if (args[0] === 'log') return { code: 0, stdout: 'feat: work', stderr: '' }
+      return { code: 0, stdout: '', stderr: '' }
+    }
+    const { github } = fakeGitHub({
+      [LOOKUP]: { status: 200, body: [] },
+      [CREATE]: { status: 201, body: { html_url: 'https://gh/pr/7' } },
+    })
+    const waits: number[] = []
+
+    await expect(
+      deliver({ git, github }, input, async (ms) => {
+        waits.push(ms)
+      }),
+    ).resolves.toMatchObject({ outcome: 'delivered' })
+    expect(attempts).toBe(2)
+    expect(waits).toEqual([DELIVERY_BACKOFF_MS[0]])
+  })
+
+  // The one outcome that must be impossible is a green Run with no pull
+  // request, so an exhausted Delivery fails the Run and says where the work is.
+  it('fails the Run once the retries are exhausted, naming the branch and its commits', async () => {
+    const { git } = fakeGit({ [AHEAD]: { code: 128, stderr: 'permission denied' } })
+    const { github } = fakeGitHub({})
+    const waits: number[] = []
+
+    await expect(
+      deliver({ git, github }, input, async (ms) => {
+        waits.push(ms)
+      }),
+    ).rejects.toThrow(/Delivery failed for sandcastle\/task.*permission denied.*aaa1111, bbb2222/s)
+    expect(waits).toEqual([...DELIVERY_BACKOFF_MS])
   })
 })

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import { validateBranch } from './branch.js'
-import { slugFromRemote } from './repo.js'
+import { slugFromRemote, slugOwner } from './repo.js'
 
 /**
  * Delivery: publishing a completed Run's Task Branch as a pull request, and
@@ -300,4 +300,320 @@ export const projectSlug = async (ports: DeliveryPorts): Promise<string> => {
     )
   }
   return slug
+}
+
+// -------------------------------------------------------------------- Delivery
+
+/**
+ * What a Delivery decided to do, before any of it is done.
+ *
+ * Pure, and the reason this module is testable at all: whether a Task Branch is
+ * ahead of its Base, whether something already proposes it, and which of the
+ * four outcomes follows are one decision over facts, not a sequence of network
+ * calls with judgement scattered through it.
+ */
+export type DeliveryDecision =
+  /** Push, then open a pull request. */
+  | { readonly outcome: 'delivered' }
+  /** Push; the open pull request already proposes the branch. */
+  | { readonly outcome: 'updated'; readonly pullRequestUrl: string }
+  | { readonly outcome: 'nothing-to-deliver'; readonly reason: string }
+  | { readonly outcome: 'skipped'; readonly reason: string }
+
+export const decideDelivery = (facts: {
+  readonly branch: string
+  readonly base: string
+  /** Whether the Run reached the end of its work. */
+  readonly completed: boolean
+  readonly incompleteReason?: string
+  /** Commits on the Task Branch that the Base does not have — the branch's
+   *  position, not this Run's contribution to it. */
+  readonly commitsAhead: number
+  readonly openPullRequestUrl?: string
+}): DeliveryDecision => {
+  // First, because a Run that did not finish must not spend the Loop's one
+  // human gate on work nobody claims is done. Its commits survive on the Task
+  // Branch, and re-dispatching continues them.
+  if (!facts.completed) {
+    return {
+      outcome: 'skipped',
+      reason:
+        `The Run did not complete (${facts.incompleteReason ?? 'reason unrecorded'}), so ` +
+        `${facts.branch} was not proposed. Its commits are on that branch; re-dispatch to ` +
+        `continue them.`,
+    }
+  }
+  // Before the pull request, deliberately: a pull request that proposes nothing
+  // is not live work, so the branch's position decides first.
+  if (facts.commitsAhead === 0) {
+    return {
+      outcome: 'nothing-to-deliver',
+      reason: `${facts.branch} is not ahead of ${facts.base}, so there is nothing to propose.`,
+    }
+  }
+  if (facts.openPullRequestUrl) {
+    return { outcome: 'updated', pullRequestUrl: facts.openPullRequestUrl }
+  }
+  return { outcome: 'delivered' }
+}
+
+/** What a Run reports about its Delivery. Discriminated on `outcome`: there is
+ *  a pull request URL exactly when one proposes the branch, and a reason
+ *  exactly when none does. */
+export type Delivery =
+  | {
+      readonly outcome: 'delivered' | 'updated'
+      readonly branch: string
+      readonly base: string
+      readonly pullRequestUrl: string
+    }
+  | {
+      readonly outcome: 'nothing-to-deliver' | 'skipped'
+      readonly branch: string
+      readonly base: string
+      readonly reason: string
+    }
+
+export interface DeliveryProvenance {
+  /** The Orchestrator's id for this Run. */
+  readonly runId: string
+  readonly project: string
+  /** The Target the Run executed on. */
+  readonly target: string
+  /** The transcript, as a path on the Target. #43 replaces this with a URL. */
+  readonly transcript?: string
+}
+
+export interface DeliveryInput {
+  readonly slug: string
+  readonly branch: string
+  readonly base: string
+  readonly completed: boolean
+  readonly incompleteReason?: string
+  /** The commits this Run added, named in a Delivery failure so the work stays
+   *  findable. Not what decides the outcome — the branch's position is. */
+  readonly commits: readonly string[]
+  readonly task: string
+  readonly provenance: DeliveryProvenance
+}
+
+/** Long enough for a conventional-commit subject, short enough that this repo's
+ *  own 100-character header cap survives the ` (#N)` a squash merge appends. */
+const TITLE_MAX = 72
+
+/**
+ * The pull request's title: the first commit's subject.
+ *
+ * The agent had to satisfy the Project's own commit conventions to commit at
+ * all, so its subject is the one string on hand already known to pass that
+ * repository's title lint — which matters wherever a pull request title is
+ * linted, as it is here and on the #39 test bed. Truncated task text is a
+ * fallback for a branch with no usable subject, not a co-equal option.
+ */
+export const pullRequestTitle = (subject: string | undefined, task: string): string => {
+  const trimmed = (subject ?? '').trim()
+  if (trimmed) return trimmed
+  const flat = task.replace(/\s+/gu, ' ').trim()
+  return flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX - 1).trimEnd()}…` : flat
+}
+
+/** The pull request's body: what the agent was asked for, verbatim, and what
+ *  produced it. A reviewer arriving cold needs both. */
+export const pullRequestBody = (input: {
+  readonly task: string
+  readonly base: string
+  readonly provenance: DeliveryProvenance
+}): string =>
+  [
+    input.task.trim(),
+    '',
+    '---',
+    '',
+    'Delivered by a sandcastle Run.',
+    '',
+    `- Run: ${input.provenance.runId}`,
+    `- Project: ${input.provenance.project}`,
+    `- Target: ${input.provenance.target}`,
+    `- Base: ${input.base}`,
+    `- Transcript: ${input.provenance.transcript ?? '(not captured)'} — a path on the Target`,
+    '',
+  ].join('\n')
+
+const pullRequest = z.object({ html_url: z.string().min(1) })
+const pullRequests = z.array(pullRequest)
+
+/** The open pull request for this head branch, if there is one. Open only:
+ *  Task Branch names are derived from task text and truncated, so name reuse
+ *  across time is expected, and reopening a merged pull request would
+ *  re-propose commits the Base already has. */
+const openPullRequestUrl = async (
+  ports: DeliveryPorts,
+  slug: string,
+  branch: string,
+): Promise<string | undefined> => {
+  const head = encodeURIComponent(`${slugOwner(slug)}:${branch}`)
+  const { status, body } = await ports.github({
+    method: 'GET',
+    path: `/repos/${slug}/pulls?state=open&head=${head}&per_page=1`,
+  })
+  if (status !== 200) {
+    throw new Error(
+      `Could not ask GitHub whether ${branch} already has an open pull request ` +
+        `(HTTP ${status})${apiDetail(body)}.`,
+    )
+  }
+  const parsed = pullRequests.safeParse(body)
+  if (!parsed.success) {
+    throw new Error(`GitHub's answer about ${branch}'s pull requests was not a list of them.`)
+  }
+  return parsed.data[0]?.html_url
+}
+
+/** Open the pull request. Ready rather than draft: the Loop's gate is the merge,
+ *  and a draft notifies nobody. */
+const createPullRequest = async (
+  ports: DeliveryPorts,
+  input: DeliveryInput,
+  title: string,
+): Promise<string> => {
+  const { status, body } = await ports.github({
+    method: 'POST',
+    path: `/repos/${input.slug}/pulls`,
+    body: {
+      title,
+      body: pullRequestBody(input),
+      head: input.branch,
+      base: input.base,
+    },
+  })
+  if (status !== 201) {
+    throw new Error(
+      `Could not open a pull request for ${input.branch} against ${input.base} ` +
+        `(HTTP ${status})${apiDetail(body)}.`,
+    )
+  }
+  const parsed = pullRequest.safeParse(body)
+  if (!parsed.success) {
+    throw new Error(`GitHub accepted the pull request for ${input.branch} but did not name it.`)
+  }
+  return parsed.data.html_url
+}
+
+/**
+ * How many commits the Task Branch has that its Base does not.
+ *
+ * Against the remote-tracking ref this Run fetched, which is what "ahead of its
+ * Base" means: the question is whether there is anything to propose, not
+ * whether this particular Run added to it.
+ */
+const commitsAhead = async (ports: DeliveryPorts, range: string, base: string): Promise<number> => {
+  const counted = await gitOut(
+    ports,
+    ['rev-list', '--count', range],
+    `Counting the Task Branch's commits ahead of ${base}`,
+  )
+  const ahead = Number.parseInt(counted, 10)
+  if (!Number.isInteger(ahead)) {
+    throw new Error(`git counted ${range} as "${counted}", which is not a number of commits.`)
+  }
+  return ahead
+}
+
+const firstSubject = async (ports: DeliveryPorts, range: string): Promise<string | undefined> => {
+  const subjects = await gitOut(
+    ports,
+    ['log', '--reverse', '--format=%s', range],
+    "Reading the Task Branch's commit subjects",
+  )
+  return subjects.split('\n')[0]?.trim() || undefined
+}
+
+const deliverOnce = async (ports: DeliveryPorts, input: DeliveryInput): Promise<Delivery> => {
+  const branchRef = `refs/heads/${input.branch}`
+  const range = `refs/remotes/origin/${input.base}..${branchRef}`
+  const { branch, base } = input
+
+  // Gathered only for a Run that completed: the facts cost a round-trip each,
+  // and a Run that did not complete has already decided the outcome.
+  const facts = input.completed
+    ? {
+        commitsAhead: await commitsAhead(ports, range, base),
+        openPullRequestUrl: await openPullRequestUrl(ports, input.slug, branch),
+      }
+    : { commitsAhead: 0, openPullRequestUrl: undefined }
+
+  const decision = decideDelivery({ ...input, ...facts })
+  if (decision.outcome === 'skipped' || decision.outcome === 'nothing-to-deliver') {
+    return { outcome: decision.outcome, branch, base, reason: decision.reason }
+  }
+
+  // The refspec is explicit so no `push.default` in the Harness's git config can
+  // change what is pushed. No force: a Task Branch that diverged on the remote
+  // is a legible failure, never a rewrite of commits already under review.
+  await gitOut(ports, ['push', 'origin', `${branchRef}:${branchRef}`], `Pushing ${branch}`)
+
+  if (decision.outcome === 'updated') {
+    return { outcome: 'updated', branch, base, pullRequestUrl: decision.pullRequestUrl }
+  }
+  const title = pullRequestTitle(await firstSubject(ports, range), input.task)
+  return {
+    outcome: 'delivered',
+    branch,
+    base,
+    pullRequestUrl: await createPullRequest(ports, input, title),
+  }
+}
+
+/**
+ * Attempts, and the pauses between them.
+ *
+ * The Orchestrator's retry count for a Run is zero and stays that way (ADR
+ * 0002): a retried Run would restart the agent and burn subscription usage
+ * again. That rationale is about the agent, and it is exactly why Delivery
+ * retries *here* instead — a transient push or API failure at this point would
+ * otherwise discard twenty minutes of quota-burning work that is already done
+ * and committed. Honouring ADR 0002 and retrying the Delivery are the same
+ * position, not opposite ones.
+ */
+const DELIVERY_ATTEMPTS = 3
+export const DELIVERY_BACKOFF_MS: readonly number[] = [2000, 8000]
+
+const pause = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+
+const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+/**
+ * Deliver a Run: push its Task Branch and open or update its pull request.
+ *
+ * Every attempt re-reads the facts before acting, so a retry after a half-
+ * completed attempt sees the world as it now is. One consequence is worth
+ * naming: if a pull request was created and the response was lost, the retry
+ * finds it open and reports `updated` rather than `delivered`. The outcome tag
+ * is then off by one word; the pull request, which is what the Loop gates on,
+ * is right.
+ */
+export const deliver = async (
+  ports: DeliveryPorts,
+  input: DeliveryInput,
+  sleep: (ms: number) => Promise<void> = pause,
+): Promise<Delivery> => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await deliverOnce(ports, input)
+    } catch (cause) {
+      if (attempt >= DELIVERY_ATTEMPTS) {
+        throw new Error(
+          `Delivery failed for ${input.branch} after ${DELIVERY_ATTEMPTS} attempts: ` +
+            `${detail(cause)}\nThe Run's work is not lost: its commits are on ${input.branch} ` +
+            `(${input.commits.join(', ') || 'none added by this Run'}), based on ${input.base}. ` +
+            `Re-dispatching to the same branch re-attempts the Delivery.`,
+          { cause },
+        )
+      }
+      await sleep(DELIVERY_BACKOFF_MS[attempt - 1] ?? 0)
+    }
+  }
 }
