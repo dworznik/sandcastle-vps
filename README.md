@@ -134,9 +134,20 @@ A **Session** is where you work on a Project yourself, rather than by Dispatchin
 
 **Detach.** tmux's own `C-b d`, or just close the connection. Nothing stops. **Stop** is a separate, explicit choice on the same menu, and it removes the container and its tmux windows together.
 
-Two files are generated for each Project: a compose file under `<install dir>/sessions/<project>/`, regenerated on every open, and a `.devcontainer/devcontainer.json` in the checkout pointing an editor at the same container — the only thing written into the repository, ignored from inside its own directory so the Project's `.gitignore` is untouched and an agent never sees it. A Project Onboarded before Sessions existed gets both on its first open.
+Four files are generated for each Project under `<install dir>/sessions/<project>/`, regenerated on every open: the compose file, an init script the container starts through, and a profile every login shell in it sources; plus a `.devcontainer/devcontainer.json` in the checkout pointing an editor at the same container — the only thing written into the repository, ignored from inside its own directory so the Project's `.gitignore` is untouched and an agent never sees it. A Project Onboarded before Sessions existed gets them all on its first open.
 
-What a Session does not yet carry, in this slice: the agent's credentials and your own Claude login (#88), and persisted history and dotfiles (#89). Attaching needs a terminal on both ends, which the ssh Connector provides; a kind of Target with no terminal to offer says so and leaves the Session running for you to reach another way.
+**Who commits, and who is logged in.** Inside a Session, git commits as the agent and Claude Code runs as you ([ADR 0007](docs/adr/0007-interactive-sessions-as-per-project-containers.md), narrowed by [ADR 0010](docs/adr/0010-the-platform-is-the-operators-agent-vps.md)). The container gets what a Sandbox gets for git — the GitHub token, the author name and email, and the signing key mounted read-only — and its init script configures git from them exactly as a Run does, so a commit made in a Session is authored and signed as the agent and verifies on GitHub, and `gh` is authenticated with the same token without it ever reaching the checkout's git config. The values are filled from the Target's `.env` when the container starts; the generated files hold names, never tokens.
+
+The Claude credential is the exception. A Session must **not** carry `CLAUDE_CODE_OAUTH_TOKEN`, or Claude Code would take the Run token over your login and silently ignore it. Instead, one external Docker volume, `sandcastle-vps-claude`, is created when you enable `sessions` and mounted at `~/.claude` in every Session on the Target, and Claude Code is pointed at it, so a `claude auth login` done once in any Session serves every Project, refreshes itself, keeps your MCP logins, and survives stopping and starting Sessions. The Run token is still present, under the name `SANDCASTLE_RUN_TOKEN`, for the one thing that needs it: the profile wraps the `sandcastle` command so a Sandbox you start from a Session receives it as `CLAUDE_CODE_OAUTH_TOKEN`, and nothing else does. **A Workstation Target therefore holds two Claude credentials — your login and the Run token, both on the same subscription.** That is the cost ADR 0010 states, and `status` reports whether the login is there.
+
+**First time on a fresh Workstation Target**, inside any Session — the platform runs none of this and seeds nothing into `~/.claude`:
+
+```bash
+claude auth login            # once; every Session on this Target is then logged in
+claude plugin install <…>    # the plugins you use; the image carries only skills
+```
+
+What a Session does not yet carry, in this slice: persisted history and dotfiles (#89). Attaching needs a terminal on both ends, which the ssh Connector provides; a kind of Target with no terminal to offer says so and leaves the Session running for you to reach another way.
 
 ### 7. Status, toggles, and rotating credentials
 

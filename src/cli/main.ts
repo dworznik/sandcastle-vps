@@ -8,7 +8,7 @@ import { localShell, type LocalShell } from './local.js'
 import { addProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { rotateCredentials } from './rotate.js'
-import { sessionsMenu } from './sessions.js'
+import { applySessions, sessionsMenu } from './sessions.js'
 import { reportStatus } from './status.js'
 import { toggleFromMenu } from './toggles.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
@@ -242,10 +242,11 @@ const menu = async (session: Session): Promise<void> => {
       }
     }
     if (action === 'sessions') await sessionsMenu(session)
-    // Flipping `access` brings the WireGuard service up or down (ADR 0011);
-    // `sessions` only records state, and Sessions read it when opened.
+    // Flipping a toggle also brings its service up or down: `sessions` the
+    // shared login volume (ADR 0010), `access` WireGuard (ADR 0011).
     if (action === 'toggles') {
       await toggleFromMenu(session, console.log, {
+        sessions: (enabled) => applySessions(session, enabled),
         access: (enabled) => applyAccess(session, enabled),
       })
     }

@@ -6,7 +6,9 @@ import { parseProbe } from './preflight.js'
 import type { TargetProfile } from './profiles.js'
 import type { Prompter } from './prompt.js'
 import {
+  CLAUDE_VOLUME,
   attachScript,
+  ensureClaudeVolumeScript,
   listScript,
   parseSessions,
   specFor,
@@ -15,6 +17,40 @@ import {
   writeSessionArtifacts,
 } from './session-files.js'
 import { probeInstall } from './status.js'
+
+/** What the operator does once, inside any Session, on a fresh Workstation
+ *  Target. Printed when sessions is enabled and kept in the README; the
+ *  platform runs none of it and seeds nothing into `~/.claude` (ADR 0010). */
+export const FIRST_TIME = [
+  'First time on this Target, inside any Session:',
+  '  claude auth login          — one login serves every Session, and refreshes itself',
+  '  claude plugin install …    — the plugins you use; the image carries only skills',
+  'Nothing is seeded into ~/.claude: what you set up there is yours.',
+].join('\n')
+
+/**
+ * The `sessions` toggle's hook: enabling creates the shared login volume;
+ * disabling keeps it, so the login is still there when sessions comes back.
+ * Running Sessions are not stopped by disabling — stop is explicit, on the
+ * Sessions menu — and the toggle only gates opening new ones.
+ */
+export const applySessions = async (
+  { profile, connector }: { readonly profile: TargetProfile; readonly connector: Connector },
+  enabled: boolean,
+  log: Log = console.log,
+): Promise<void> => {
+  if (!enabled) {
+    log(`\nThe login volume ${CLAUDE_VOLUME} is kept, so a login survives sessions being off.`)
+    log('Running Sessions keep running; stop them from the Sessions menu.')
+    return
+  }
+  const created = await connector.exec(ensureClaudeVolumeScript())
+  if (created.code !== 0) {
+    throw fail(`Creating the ${CLAUDE_VOLUME} volume`, created.code, created.stderr)
+  }
+  log(`\nThe shared login volume ${CLAUDE_VOLUME} is there, for every Session on ${profile.name}.`)
+  log(`\n${FIRST_TIME}`)
+}
 
 /**
  * The menu's "Sessions": the flow that opens a Session on a Project — start

@@ -284,8 +284,10 @@ describe('addProject', () => {
   // hold paths and a gid, and one of them lives where the Harness cannot see.
   it('runs every step inside the Harness container', async () => {
     const { ran } = await run(ANSWERS, { before: [] })
+    // The Session's generated files are written under the install directory
+    // and the checkout by the Target's own shell, not through the Harness.
     const sessionFile = (script: string) =>
-      script.includes('compose.yaml') || script.includes('devcontainer.json')
+      script.includes('/sessions/') || script.includes('devcontainer.json')
     const withScript = ran.filter((step) => step.stdin !== '' && !sessionFile(step.script))
     expect(withScript.length).toBeGreaterThan(0)
     for (const step of withScript) {
