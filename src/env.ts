@@ -35,6 +35,11 @@ const schema = z.object({
    *  running the server directly in development never widens itself. */
   HOST: z.string().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  /** Where the Orchestrator is. The Inngest SDK reads this same variable to
+   *  send events; the Harness reads it to ask the Orchestrator what it has
+   *  synced before sending one (#44). One variable, so the two cannot name
+   *  different Orchestrators. The default is the SDK's own. */
+  INNGEST_BASE_URL: z.url().default('http://127.0.0.1:8288'),
 
   // ------------------------------------------------------------ credentials
   //
@@ -80,6 +85,8 @@ export interface Env {
   readonly defaultModel: string
   readonly host: string
   readonly port: number
+  /** The Orchestrator's base URL, without a trailing slash. */
+  readonly orchestratorUrl: string
   /** Whatever of the agent's identity the Target has been given so far. */
   readonly credentials: Partial<AgentCredentials>
 }
@@ -122,6 +129,7 @@ export const parseEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
     defaultModel: data.AGENT_MODEL,
     host: data.HOST,
     port: data.PORT,
+    orchestratorUrl: data.INNGEST_BASE_URL.replace(/\/+$/, ''),
     credentials: {
       agentToken: data.CLAUDE_CODE_OAUTH_TOKEN,
       githubToken: data.GH_TOKEN,

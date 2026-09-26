@@ -11,6 +11,7 @@ describe('parseEnv', () => {
       defaultModel: 'claude-opus-4-8',
       host: '127.0.0.1',
       port: 3000,
+      orchestratorUrl: 'http://127.0.0.1:8288',
       credentials: {
         agentToken: undefined,
         githubToken: undefined,
@@ -26,6 +27,14 @@ describe('parseEnv', () => {
   // development — the keyless Dispatch surface stays on loopback.
   it('takes the address compose gives the container', () => {
     expect(parseEnv({ ...complete, HOST: '0.0.0.0' }).host).toBe('0.0.0.0')
+  })
+
+  // The same variable the Inngest SDK reads, so the Harness asks the
+  // Orchestrator it sends to and no other. Compose sets it by service name.
+  it('finds the Orchestrator where the SDK does, minus any trailing slash', () => {
+    expect(
+      parseEnv({ ...complete, INNGEST_BASE_URL: 'http://inngest:8288/' }).orchestratorUrl,
+    ).toBe('http://inngest:8288')
   })
 
   it('reads the port as a number, not the string it arrives as', () => {

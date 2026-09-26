@@ -14,6 +14,7 @@ const app = (overrides: Partial<AppDeps> = {}) =>
     locateRun: async () => undefined,
     runPageUrl: (id) => `http://127.0.0.1:3000/runs/${id}`,
     secrets: ['sk-ant-oat01-fixture-token'],
+    harnessSynced: async () => true,
     ...overrides,
   })
 
@@ -139,6 +140,43 @@ describe('POST /dispatch', () => {
     expect(response.status).toBe(400)
     expect(await response.json()).toEqual({ error: 'Project "nope" has not been Onboarded' })
     expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  // The cold-start window (#44): an event the Orchestrator accepts before it
+  // has synced the Harness never becomes a Run. So until it says the Harness
+  // is synced, a Dispatch is refused with a status that says "not yet" rather
+  // than "no" — and nothing is sent.
+  it('answers 503 with Retry-After, and sends nothing, until the Orchestrator has synced the Harness', async () => {
+    const dispatch = dispatched()
+    const response = await post(
+      { project: 'todo-app', task: 'Fix it' },
+      { dispatch, harnessSynced: async () => false },
+    )
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('retry-after')).toBe('2')
+    expect(await response.json()).toEqual({
+      error:
+        'The Orchestrator has not synced the Harness yet, or is not answering; retry in a moment.',
+    })
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  // Not synced is checked after the Project resolves: a Dispatch that is
+  // wrong should learn that, not be told to retry something that can never
+  // succeed.
+  it('refuses an unresolvable Project even while the Orchestrator is not synced', async () => {
+    const response = await post(
+      { project: 'nope', task: 'Fix it' },
+      {
+        harnessSynced: async () => false,
+        resolveProject: async () => {
+          throw new Error('Project "nope" has not been Onboarded')
+        },
+      },
+    )
+
+    expect(response.status).toBe(400)
   })
 
   it('names what was wrong with an unusable payload', async () => {

@@ -1,4 +1,8 @@
 import { APP_ID } from '../app-id.js'
+// The same query the Harness runs before a Dispatch, asked from outside. The
+// judgement differs on purpose: a Dispatch needs one yes or no, an install
+// report needs to say which of several things is wrong.
+import { APPS_QUERY, type OrchestratorApp } from '../orchestrator.js'
 import type { Connector } from './connectors/types.js'
 import { exposedListeners, parseListeners, stackPorts, type Listener } from './listeners.js'
 import { shellQuote } from './shell.js'
@@ -29,17 +33,6 @@ export interface Check {
  *  from the one `syncCheck` returns. Capitalised as CONTEXT.md capitalises
  *  them: these are operator-facing prose, not ids like preflight's. */
 const SYNC_LABEL = 'Harness synced'
-
-/** `apps` is the Orchestrator's own view of what has synced with it. */
-const APPS_QUERY = '{ apps { name url connected functionCount error } }'
-
-interface OrchestratorApp {
-  readonly name?: string
-  readonly url?: string
-  readonly connected?: boolean
-  readonly functionCount?: number
-  readonly error?: string | null
-}
 
 /**
  * Run a command on the Target's own loopback, using the image the install just

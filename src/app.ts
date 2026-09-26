@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { env, secretValues } from './env.js'
 import { sandcastleRun } from './functions/run.js'
 import { inngest, runRequested, runRequestedData } from './inngest.js'
+import { harnessSynced } from './orchestrator.js'
 import { listProjects, resolveProject } from './projects.js'
 import { locateRun, redact, resolveRunFile, runPageUrl, validateRunId } from './run-logs/run-dir.js'
 
@@ -32,6 +33,10 @@ export interface AppDeps {
    *  its own files scrubbed already; sandcastle's log is written by
    *  sandcastle, and this is where it gets the same treatment. */
   readonly secrets: readonly string[]
+  /** Whether the Orchestrator has synced this Harness and can route an event
+   *  to the Run function. False until it has, and false when it cannot be
+   *  asked. */
+  readonly harnessSynced: () => Promise<boolean>
 }
 
 const liveDeps: AppDeps = {
@@ -41,6 +46,7 @@ const liveDeps: AppDeps = {
   locateRun: (id) => locateRun(env.workspaceRoot, id),
   runPageUrl: (id) => runPageUrl(env.port, id),
   secrets: secretValues(env.credentials),
+  harnessSynced: () => harnessSynced(env.orchestratorUrl),
 }
 
 const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -61,6 +67,11 @@ const isRunId = (id: string): boolean => {
     return false
   }
 }
+
+// One message for two conditions — not synced yet, and not answering — because
+// the Dispatch surface cannot tell them apart and the remedy is the same.
+const NOT_SYNCED =
+  'The Orchestrator has not synced the Harness yet, or is not answering; retry in a moment.'
 
 export const createApp = (deps: AppDeps = liveDeps): Hono => {
   const app = new Hono()
@@ -132,6 +143,16 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
         await deps.resolveProject(data.project)
       } catch (error) {
         return c.json({ error: detail(error) }, 400)
+      }
+      // The cold-start window (#44, see `harnessSynced`): an event the
+      // Orchestrator accepts before it has synced the Harness never becomes a
+      // Run. Asking first closes the window at the only place that can close
+      // it; 503 with Retry-After says "not yet", which is what `sandcastle-run`
+      // waits on. After the Project check, so a Dispatch that can never
+      // succeed is not told to retry.
+      if (!(await deps.harnessSynced())) {
+        c.header('Retry-After', '2')
+        return c.json({ error: NOT_SYNCED }, 503)
       }
       const { ids } = await deps.dispatch(data)
       // The link, before the Run starts: the run directory is keyed by this

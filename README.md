@@ -73,6 +73,8 @@ The Dispatch surface is published on the Target's loopback and nowhere else — 
   [--branch sandcastle/login-test] [--base main] [--model claude-opus-4-8]
 ```
 
+For a few seconds after the stack starts, the surface answers 503 with `Retry-After`: the Orchestrator accepts events before it has synced the Harness, and an event accepted then would never become a Run, so the Harness refuses to send one until the Orchestrator says it is synced. `sandcastle-run` waits that out for you; a caller posting directly should retry on 503.
+
 It needs `curl` and `jq` on the Target. Nothing else does — install and Onboarding go through the Harness container — so if they aren't there, post to the surface directly instead:
 
 ```bash
