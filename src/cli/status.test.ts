@@ -250,6 +250,21 @@ describe('gatherStatus', () => {
     expect(said).toContain('the one intended public listener')
   })
 
+  // What a device holding a config can reach is readable from status alone
+  // (ADR 0011), so the Memory UI appears there exactly when it is exposed.
+  it('lists the Memory UI as an Exposed Service only with sessions on', async () => {
+    const both = await gather({
+      env: `${FULL_ENV}ACCESS_ENABLED=true\nSESSIONS_ENABLED=true\nACCESS_ENDPOINT=vps.example.com\n`,
+      accessService: 'access\trunning\n',
+    })
+    expect(formatStatus(both.report)).toContain('Memory UI: http://10.13.13.1:37777')
+    const alone = await gather({
+      env: `${FULL_ENV}ACCESS_ENABLED=true\nACCESS_ENDPOINT=vps.example.com\n`,
+      accessService: 'access\trunning\n',
+    })
+    expect(formatStatus(alone.report)).not.toContain('Memory UI')
+  })
+
   it('reads a fresh install as access off', async () => {
     const { report } = await gather()
     expect(report.access.enabled).toBe(false)
@@ -377,7 +392,7 @@ describe('formatStatus', () => {
     claudeLogin: 'no-volume',
     memory: { enabled: false, service: '', health: { ok: false } },
     network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
-    access: { enabled: false, port: 51820, peers: [], service: '', listening: [] },
+    access: { enabled: false, port: 51820, peers: [], service: '', listening: [], exposed: [] },
     ...overrides,
   })
 

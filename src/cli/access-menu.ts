@@ -3,7 +3,6 @@ import {
   CLOUDFLARE_TOKEN_KEY,
   DNS_ZONE_KEY,
   ENDPOINT_KEY,
-  EXPOSED_SERVICES,
   INTERNAL_NAME_KEY,
   PUBLIC_NAME_KEY,
   TUNNEL_ADDRESS,
@@ -15,7 +14,6 @@ import {
   describePeer,
   dnsRecordScript,
   endpointFrom,
-  exposedAt,
   exposedFor,
   parseDnsRecord,
   peerEndpoint,
@@ -380,7 +378,7 @@ export const setupDns = async (
 
   log(`\nPeers added from now on dial ${publicName}; those added before keep the address, which`)
   log('ddclient keeps the name pointed at. Exposed over Access:')
-  for (const service of exposedAt(EXPOSED_SERVICES, dns)) log(`  ${service}`)
+  for (const service of exposedFor(updated)) log(`  ${service}`)
   return dns
 }
 

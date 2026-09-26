@@ -67,18 +67,43 @@ export interface ExposedService {
   readonly port: number
 }
 
-/** Day one: the Orchestrator's dashboard. claude-mem's UI joins when the
- *  Memory service exists (#94). Adding one is an entry here, never a hand
- *  edit on the Target. */
+/** Exposed on every Target with access on: the Orchestrator's dashboard.
+ *  Adding one is an entry here, never a hand edit on the Target. */
 export const EXPOSED_SERVICES: readonly ExposedService[] = [
   { label: 'Orchestrator dashboard', service: 'inngest', port: 8288 },
 ]
 
-/** Never exposed, whatever the port: the Harness serves the Dispatch surface,
+/**
+ * claude-mem's UI, exposed while `sessions` is on: not the worker, but the
+ * proxy the Memory compose project runs beside it (memory.ts). The worker's
+ * origin check accepts only loopback origins and cannot be configured, so
+ * over the VPN its viewer would load and every write would be refused; the
+ * proxy rewrites the Origin header to a loopback value on the way in
+ * (ADR 0010). Same port as the worker, so a Peer reaches the UI at the port
+ * the plugin is known by. Temporary by declaration: when an upstream
+ * claude-mem release adds a configurable origin list, this entry names the
+ * worker again and the proxy goes.
+ */
+export const MEMORY_UI: ExposedService = { label: 'Memory UI', service: 'memory-ui', port: 37777 }
+
+/** The Exposed Services of a Target, from its Local Config: the dashboard
+ *  always, and the Memory UI while `sessions` is on — Memory comes up with
+ *  that toggle (ADR 0010), and an allowlist entry for a service that is not
+ *  there would be a rule pointing at nothing. Whether access itself is on is
+ *  not read here: the list says what is exposed once it is. */
+export const exposedServices = (envContent: string): ExposedService[] =>
+  readToggles(envContent).sessions ? [...EXPOSED_SERVICES, MEMORY_UI] : [...EXPOSED_SERVICES]
+
+/** Never exposed, whatever the port. The Harness serves the Dispatch surface,
  *  which is keyless by design — reachability is its access control, and it is
  *  the one endpoint that does work on the operator's behalf rather than
- *  showing them things (ADR 0011). */
-const NEVER_EXPOSED: readonly string[] = ['harness']
+ *  showing them things (ADR 0011). The Memory worker refuses writes from any
+ *  origin but loopback, so exposing it is exposing a read-only UI at best;
+ *  its proxy, MEMORY_UI, is what a Peer reaches. */
+const NEVER_EXPOSED: Readonly<Record<string, string>> = {
+  harness: 'The Dispatch surface ($) can never be exposed — nothing behind it authenticates.',
+  memory: 'The Memory worker ($) is never exposed — its proxy is what a Peer reaches (ADR 0010).',
+}
 
 const SERVICE_NAME = /^[a-z][a-z0-9_-]*$/u
 
@@ -89,11 +114,8 @@ const SERVICE_NAME = /^[a-z][a-z0-9_-]*$/u
  */
 export const expose = (services: readonly ExposedService[]): string => {
   for (const { service, port } of services) {
-    if (NEVER_EXPOSED.includes(service)) {
-      throw new Error(
-        `The Dispatch surface (${service}:${port}) can never be exposed — nothing behind it authenticates.`,
-      )
-    }
+    const refused = NEVER_EXPOSED[service]
+    if (refused) throw new Error(refused.replace('$', `${service}:${port}`))
     if (!SERVICE_NAME.test(service)) throw new Error(`Not a compose service name: ${service}`)
     if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
       throw new Error(`Not a port: ${port} for ${service}`)
@@ -218,7 +240,7 @@ export const parseDnsRecord = (stdout: string): DnsRecord => {
 /** The Exposed Services as the operator reaches them from this Target's
  *  Local Config: by name once DNS is configured, by address before. */
 export const exposedFor = (envContent: string): string[] =>
-  exposedAt(EXPOSED_SERVICES, readDns(envContent))
+  exposedAt(exposedServices(envContent), readDns(envContent))
 
 /** What a Peer's config dials: the public name once DNS is configured, the
  *  recorded address before. A Peer added before DNS keeps its address and
@@ -518,7 +540,7 @@ export const accessUp = async (
   const token = readEnv(envContent, CLOUDFLARE_TOKEN_KEY)
   const files: [string, string][] = [
     ['compose.yaml', accessCompose(installDir, port, dns)],
-    ['allowlist', expose(EXPOSED_SERVICES)],
+    ['allowlist', expose(exposedServices(envContent))],
     // The token is in this file, which is why it goes over stdin to a mode
     // 600 file like the environment file, and why compose is not handed it.
     ...(dns && token ? [['ddclient.conf', ddclientConf(dns, token)] as [string, string]] : []),
@@ -533,19 +555,61 @@ export const accessUp = async (
   if (peers.code !== 0) throw fail('Creating access/peers.conf', peers.code, peers.stderr)
 
   log(`\nBuilding the Access image and starting WireGuard on udp/${port}…`)
-  const up = await connector.exec(accessComposeScript(installDir, 'up -d --build'))
+  // Recreated every time, not only when compose sees a change: the entrypoint
+  // resolves each Exposed Service's address when it starts, and an upgrade
+  // that recreated the Memory proxy without touching this container would
+  // leave rules pointing at the old address. The cost is a moment without
+  // tunnels on an upgrade, which restarts the rest of the stack anyway.
+  const up = await connector.exec(accessComposeScript(installDir, 'up -d --build --force-recreate'))
   if (up.code !== 0) throw fail('docker compose up (access)', up.code, up.stderr)
+}
+
+/**
+ * A compose command against the Access project, or nothing at all on a
+ * Target where the service was never brought up — a toggle set by hand, or
+ * an enable whose `up` failed before the compose file was written — rather
+ * than a `cd` into a directory that is not there.
+ */
+const ifAccessExists = (installDir: string, command: string): string => `set -eu
+cd ${shellQuote(accessDir(installDir))} 2> /dev/null || exit 0
+[ -f compose.yaml ] || exit 0
+docker compose ${command}`
+
+/** Restart the running service so it re-reads its files. */
+export const accessRestartScript = (installDir: string): string =>
+  ifAccessExists(installDir, 'restart access')
+
+/**
+ * Bring the allowlist up to date with the toggles, on a Target with access
+ * on: the Memory UI joins it with `sessions` and leaves with it, and the
+ * entrypoint reads the file only at start. A restart, not an `up`: compose
+ * sees nothing changed when only a mounted file did. The restart drops live
+ * tunnels for a moment, as adding a Peer does; the alternative, rules that
+ * disagree with what `status` says is exposed, is worse. Nothing at all when
+ * access is off — the next enable writes the list from the toggles anyway.
+ */
+export const accessRefresh = async (
+  connector: Connector,
+  installDir: string,
+  envContent: string,
+  log: (line: string) => void,
+): Promise<void> => {
+  if (!readToggles(envContent).access) return
+  const written = await connector.exec(writeAccessFileScript(installDir, 'allowlist'), {
+    stdin: expose(exposedServices(envContent)),
+  })
+  if (written.code !== 0) throw fail('Writing access/allowlist', written.code, written.stderr)
+  log('\nRestarting the Access service so its allowlist follows the toggles…')
+  const restarted = await connector.exec(accessRestartScript(installDir))
+  if (restarted.code !== 0) {
+    throw fail('Restarting the Access service', restarted.code, restarted.stderr)
+  }
 }
 
 /** `down` without `-v`: the server key stays in its volume, so enabling
  *  access again brings the same identity back and existing Peer configs keep
- *  working. Nothing to do on a Target where the service was never brought up
- *  — a toggle set by hand, or an enable whose `up` failed before the compose
- *  file was written — rather than a `cd` into a directory that is not there. */
-export const accessDownScript = (installDir: string): string => `set -eu
-cd ${shellQuote(accessDir(installDir))} 2> /dev/null || exit 0
-[ -f compose.yaml ] || exit 0
-docker compose down`
+ *  working. */
+export const accessDownScript = (installDir: string): string => ifAccessExists(installDir, 'down')
 
 /** Stop the service, keeping the server key. */
 export const accessDown = async (connector: Connector, installDir: string): Promise<void> => {
@@ -568,6 +632,9 @@ export interface AccessStatus {
   readonly service: string
   /** Sockets bound on the WireGuard port, off loopback. */
   readonly listening: readonly Listener[]
+  /** What the toggles expose, whether or not the service is up to date with
+   *  them — the allowlist is rewritten whenever they flip. */
+  readonly exposed: readonly ExposedService[]
 }
 
 export const ACCESS_OFF: AccessStatus = {
@@ -576,6 +643,7 @@ export const ACCESS_OFF: AccessStatus = {
   peers: [],
   service: '',
   listening: [],
+  exposed: [],
 }
 
 /** Read-only, like everything `status` does. */
@@ -610,6 +678,7 @@ export const gatherAccess = async (
     listening: parseUdpTables(udp.stdout).filter(
       (listener) => listener.port === port && !listener.loopback,
     ),
+    exposed: exposedServices(envContent),
   }
 }
 
@@ -644,7 +713,7 @@ export const formatAccess = (status: AccessStatus): string[] => {
   } else {
     for (const peer of status.peers) lines.push(describePeer(peer))
   }
-  for (const service of exposedAt(EXPOSED_SERVICES, status.dns)) {
+  for (const service of exposedAt(status.exposed, status.dns)) {
     lines.push(`  exposed     ${service}`)
   }
   return lines

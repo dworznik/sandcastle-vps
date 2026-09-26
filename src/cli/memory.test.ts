@@ -21,6 +21,7 @@ import {
   parseHealth,
   writeMemoryFileScript,
 } from './memory.js'
+import { MEMORY_UI } from './access.js'
 import { PLATFORM_NETWORK } from './network.js'
 import { CLAUDE_HOME, CLAUDE_VOLUME } from './session-files.js'
 
@@ -128,6 +129,29 @@ describe('memoryCompose', () => {
 
   it('comes back after a restart of the Target', () => {
     expect(compose).toContain('restart: unless-stopped')
+  })
+})
+
+// The worker's origin check accepts only loopback origins and cannot be
+// configured, so what Access exposes is a proxy beside it that rewrites the
+// Origin header (ADR 0010). Temporary by declaration: the compose file says
+// what removes it.
+describe('memoryCompose: the Origin-rewriting proxy', () => {
+  const compose = memoryCompose(INSTALL_DIR)
+
+  it('runs the proxy as its own service, named as the Exposed Service list names it', () => {
+    expect(compose).toContain(`\n  ${MEMORY_UI.service}:\n`)
+    expect(compose).toContain('dockerfile: proxy.Dockerfile')
+  })
+
+  it('starts the proxy after the worker and publishes no port for it either', () => {
+    const proxy = compose.split(`\n  ${MEMORY_UI.service}:\n`)[1]?.split('\nvolumes:')[0] ?? ''
+    expect(proxy).toContain(`- ${MEMORY_SERVICE}`)
+    expect(proxy).not.toContain('ports:')
+  })
+
+  it('states the condition for removing it', () => {
+    expect(compose).toMatch(/configurable origin/u)
   })
 })
 
