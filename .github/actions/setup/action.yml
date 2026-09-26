@@ -10,14 +10,13 @@ runs:
 
     - uses: actions/setup-node@v7
       with:
-        # The current Active LTS, whichever that is: 24 today, 26 from
-        # 2026-10-28, without a commit to move it. This is above the floor the
-        # package declares (`engines.node`, 22) and above the Harness image's
-        # base (node:22), so CI no longer proves the code at its own minimum —
-        # the floor is guarded by `engines` and by the Harness image build on
-        # a Target, not here. Pin an explicit major again if that ever needs
-        # proving in CI too.
-        node-version: lts/*
+        # The Active LTS, and the same major the Harness runs on a Target
+        # (docker/harness/Dockerfile) and the floor the package declares
+        # (`engines.node` in package.json). The three move together, by hand:
+        # a floating `lts/*` here or `node:lts` there would let CI and a Target
+        # installed a month apart drift onto different majors. Next move is 26,
+        # Active LTS from 2026-10-28.
+        node-version: 24
         cache: pnpm
 
     - run: pnpm install --frozen-lockfile

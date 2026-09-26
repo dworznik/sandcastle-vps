@@ -1,6 +1,11 @@
 # The Harness. A container on every Connector — there is no host-process mode
 # (ADR 0006), so this image is the only way the Harness runs.
-FROM node:22-bookworm-slim
+#
+# The Node major here is the one CI tests on (.github/actions/setup/action.yml)
+# and the floor package.json declares; move all three together. A Sandbox is
+# built from sandcastle's own template and runs the agent, not this code, so
+# its base is not tied to this one.
+FROM node:24-bookworm-slim
 
 # git for the worktree operations sandcastle performs on the Project checkout,
 # and the docker CLI for spawning sibling Sandbox containers through the Target
