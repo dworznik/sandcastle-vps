@@ -1,0 +1,61 @@
+name: Publish
+
+# A version tag on main publishes that exact version to npm. Nothing else
+# does — no push to main, no manual dispatch — so the tag is the release, and
+# a release is a commit that has already passed CI as a pull request.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  # The checks a pull request gets, by construction rather than by copy: ci.yml
+  # is called, not paraphrased, so the two cannot drift. Five of its six jobs
+  # run; the commit conventions job skips itself, since there is no pull
+  # request title to lint on a tag push.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: publish to npm
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted publishing: the job proves who it is with an OIDC token, and
+      # npm mints the provenance attestation from the same claim. Nothing
+      # stored, nothing to rotate.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tag check needs main's history, not just the tagged commit.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
+      - name: Check the tag against package.json and main
+        run: ./scripts/check-release-tag.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
+
+      # Trusted publishing only works once the package exists on npm, so the
+      # very first publish cannot use it. NPM_TOKEN exists to cover exactly
+      # that publish: set it, push the first tag, configure the trusted
+      # publisher, then delete the secret. With no token present, pnpm
+      # authenticates over OIDC.
+      #
+      # --skip-manifest-obfuscation is load-bearing: pnpm strips the
+      # packageManager field from a published manifest by default, and the
+      # Harness image build on a Target reaches pnpm through corepack, which
+      # reads that field to know which pnpm to run. The flag also keeps the
+      # publish lifecycle scripts, so `prepare` ships too; it exits 0 outside
+      # a git checkout, which a published install always is.
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$HOME/.npmrc"
+          fi
+          pnpm publish --access public --provenance --no-git-checks --skip-manifest-obfuscation

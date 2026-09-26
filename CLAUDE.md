@@ -39,6 +39,10 @@ Locally: `pnpm format`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm lint:s
 | `secrets` | a gitleaks scan of the pushed commits             |
 | `commits` | commitlint over the PR title — pull requests only |
 
+### Publishing
+
+`.github/workflows/publish.yml` runs on a pushed `v*` tag: it calls `ci.yml` as a reusable workflow rather than copying its jobs, runs `scripts/check-release-tag.sh`, and publishes over npm trusted publishing with no stored secret. The reasons behind each flag, and the one-time `NPM_TOKEN` bootstrap for a package that does not exist on npm yet, are comments in that workflow; the operator's view is the README's Releasing section. Keep all three in step.
+
 ### Formatting
 
 Prettier owns TypeScript, JavaScript, JSON, YAML and Markdown; `node_modules` and `pnpm-lock.yaml` are ignored. `.prettierrc.json`: no semicolons, single quotes, width 100, spaces, `trailingComma: "all"`, `proseWrap: "preserve"`.

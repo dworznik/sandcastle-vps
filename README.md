@@ -122,3 +122,13 @@ Rotation is also the way out of a signing key the install refuses to keep: one w
 pnpm install
 pnpm typecheck && pnpm test
 ```
+
+## Releasing
+
+A version tag on `main` is the release. Bump `version` in `package.json` through a pull request, then tag the squash commit and push the tag:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/publish.yml` runs the same checks as CI, refuses a tag whose version differs from `package.json` or whose commit is not on `main`, and publishes to npm with provenance. It authenticates with npm's trusted publishing, which is configured once on npmjs.com under the package's settings: the GitHub repository `dworznik/sandcastle-vps` and the workflow file `publish.yml`. Trusted publishing can only be configured for a package that already exists, so the first publish ever uses a granular access token in an `NPM_TOKEN` repository secret, which is deleted once the trusted publisher is in place.
