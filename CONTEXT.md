@@ -30,7 +30,7 @@ The one-time act of making a checkout a Project: scaffolding its sandcastle conf
 
 ### Task Branch
 
-The named git branch where a Run's commits land. Agent work only ever becomes visible as a Task Branch; a Run never modifies a Project's HEAD or working tree. Re-dispatching to an existing Task Branch continues that task.
+The named git branch where a Run's commits land. Agent work only ever becomes visible as a Task Branch; a Run never modifies a Project's HEAD or working tree. Re-dispatching to an existing Task Branch continues that task. Named as a human would name a branch, by type and description; one that the Watcher dispatched for an issue ends in that issue's number, which is how the Loop recognises it.
 
 ### Delivery
 
@@ -52,6 +52,14 @@ The isolated container sandcastle spawns for a single Run, containing the agent 
 
 The long-lived container on a Project, built from that Project's image, in which the operator works directly rather than by Dispatching a Run — the thing one attaches to. One per Project. The terminals inside it are windows of its multiplexer, so they survive a dropped connection; a window is not a Session, and there are never two Sessions on one Project. A Session is not a Sandbox — it may start one. Its commits sign with the agent's key, like a Run's; the operator's Claude Code inside it uses the operator's own login.
 _Avoid_: window, tmux session
+
+### Watcher
+
+The part of the Harness that turns a ready issue into a Dispatch: it polls each watched Project's tracker on a schedule, recognises the issues that are eligible, and dispatches each one's first Run. It never runs a second Run on an issue; later Runs belong to the Loop's review and repair Phases.
+
+### Brief
+
+The comment a triager leaves on an issue to make it ready for an agent: the distilled contract the Run is dispatched with. An issue without one is not eligible, whatever its label says.
 
 ### Loop
 
