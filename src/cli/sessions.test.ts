@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { Connector, ExecOptions, ExecResult } from './connectors/types.js'
 import { PLATFORM_NETWORK } from './network.js'
 import type { Choice, Prompter } from './prompt.js'
@@ -10,9 +15,13 @@ import {
   RUN_TOKEN_KEY,
   SESSION_LABEL,
   SESSION_SIGNING_KEY_PATH,
+  STATE_DIR,
+  STATE_VOLUME,
+  TMUX_SEEDED_MARKER,
   attachScript,
   devcontainer,
   ensureClaudeVolumeScript,
+  ensureStateVolumeScript,
   listScript,
   loginScript,
   parseLogin,
@@ -21,13 +30,18 @@ import {
   sessionInit,
   sessionProfile,
   sessionProject,
+  sessionState,
   startScript,
+  stateSetupCommand,
   stopScript,
+  tmuxConf,
   writeDevcontainerScript,
   writeSessionArtifacts,
   writeSessionFileScript,
   type SessionSpec,
 } from './session-files.js'
+
+const exec = promisify(execFile)
 import { FIRST_TIME, applySessions, sessionsMenu } from './sessions.js'
 
 const profile: TargetProfile = {
@@ -119,6 +133,13 @@ describe('sessionCompose', () => {
     expect(compose).not.toMatch(/(?:GH_TOKEN|AGENT_GIT_NAME|CLAUDE_CODE_OAUTH_TOKEN): [^$]/u)
   })
 
+  // The second external volume (ADR 0010): shell state, shared by every
+  // Session like the login is, and outside every Session's compose project.
+  it('mounts the shared state volume, external', () => {
+    expect(compose).toContain(`- ${STATE_VOLUME}:${STATE_DIR}`)
+    expect(compose).toContain(`  ${STATE_VOLUME}:\n    external: true`)
+  })
+
   it('mounts the shared login volume, external, and points Claude Code at it', () => {
     expect(compose).toContain(`- ${CLAUDE_VOLUME}:${CLAUDE_HOME}`)
     expect(compose).toContain(`volumes:\n  ${CLAUDE_VOLUME}:\n    external: true`)
@@ -158,6 +179,131 @@ describe('sessionInit', () => {
 
   it('then becomes the image’s own main process', () => {
     expect(init.trim().split('\n').at(-1)).toBe('exec sleep infinity')
+  })
+
+  it('sets the shell state up between the two', () => {
+    expect(init).toContain(stateSetupCommand())
+  })
+})
+
+describe('sessionState', () => {
+  const state = sessionState()
+
+  // In bash's own format, in the volume, appended as it happens: a window
+  // that dies with the container keeps what was typed in it.
+  it('keeps bash history in the volume, appended as it happens', () => {
+    expect(state).toContain(`export HISTFILE=${STATE_DIR}/bash_history`)
+    expect(state).toContain('shopt -s histappend')
+    expect(state).toContain('history -a')
+  })
+
+  it('sources the operator’s .bashrc only when there is one', () => {
+    expect(state).toContain(`[ -f ${STATE_DIR}/.bashrc ] && . ${STATE_DIR}/.bashrc`)
+  })
+})
+
+describe('tmuxConf', () => {
+  // The login shell is bash by the image and by decision (ADR 0010); the
+  // seed must not be a second place that decides it, or the operator's own
+  // config would have a platform line to fight.
+  it('sets no shell', () => {
+    expect(tmuxConf()).not.toMatch(/default-shell|default-command/u)
+    expect(tmuxConf()).not.toContain('zsh')
+  })
+
+  it('says it is the operator’s from now on', () => {
+    expect(tmuxConf()).toContain('writes it again')
+  })
+})
+
+/**
+ * The seed-once rule is a property of the shell in the init script, so it is
+ * tested by running that shell against a temporary directory standing in
+ * for the volume and the container's home.
+ */
+describe('stateSetupCommand, run for real', () => {
+  const made: string[] = []
+  afterEach(async () => {
+    await Promise.all(made.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  const scratch = async () => {
+    const root = await mkdtemp(join(tmpdir(), 'session-state-'))
+    made.push(root)
+    const home = join(root, 'home')
+    const state = join(root, 'state')
+    const files = join(root, 'files')
+    await Promise.all([home, state, files].map((dir) => exec('mkdir', ['-p', dir])))
+    await writeFile(join(home, '.bashrc'), '# the image’s own\n')
+    await writeFile(join(files, 'tmux.conf'), tmuxConf())
+    await writeFile(join(files, 'session-state.sh'), sessionState())
+    const start = () =>
+      exec('bash', ['-c', `set -eu\n${stateSetupCommand(state, files)}`], {
+        env: { ...process.env, HOME: home },
+      })
+    const listing = async () => (await readdir(state)).sort()
+    return { home, state, start, listing }
+  }
+
+  it('seeds the tmux config once, and never writes anything else', async () => {
+    const { state, start, listing } = await scratch()
+    await start()
+    expect(await listing()).toEqual(['.tmux.conf', TMUX_SEEDED_MARKER])
+    expect(await readFile(join(state, '.tmux.conf'), 'utf8')).toBe(tmuxConf())
+
+    await writeFile(join(state, '.tmux.conf'), 'set -g mouse off\n')
+    await start()
+    await start()
+    expect(await readFile(join(state, '.tmux.conf'), 'utf8')).toBe('set -g mouse off\n')
+    expect(await listing()).toEqual(['.tmux.conf', TMUX_SEEDED_MARKER])
+  })
+
+  // Removing the file returns tmux to its defaults; a seed that came back on
+  // the next start would make that impossible.
+  it('leaves a removed tmux config removed', async () => {
+    const { state, start, listing } = await scratch()
+    await start()
+    await rm(join(state, '.tmux.conf'))
+    await start()
+    expect(await listing()).toEqual([TMUX_SEEDED_MARKER])
+  })
+
+  it('links ~/.tmux.conf into the volume and hooks the state file into ~/.bashrc once', async () => {
+    const { home, state, start } = await scratch()
+    await start()
+    await start()
+    expect((await stat(join(home, '.tmux.conf'))).isFile()).toBe(true)
+    const bashrc = await readFile(join(home, '.bashrc'), 'utf8')
+    expect(bashrc.startsWith('# the image’s own')).toBe(true)
+    expect(bashrc.match(/session-state\.sh/gu)).toHaveLength(2)
+    expect(bashrc.match(/sandcastle-vps:/gu)).toHaveLength(1)
+    expect(state).toBeTruthy()
+  })
+
+  it('does nothing at all when the volume is not writable', async () => {
+    const { home, state, start, listing } = await scratch()
+    await exec('chmod', ['555', state])
+    await start()
+    expect(await listing()).toEqual([])
+    expect(await readFile(join(home, '.bashrc'), 'utf8')).toBe('# the image’s own\n')
+    await exec('chmod', ['755', state])
+  })
+})
+
+describe('ensureStateVolumeScript', () => {
+  const script = ensureStateVolumeScript('sandcastle:todo')
+
+  // A fresh named volume at a path the image lacks is root's, and the
+  // Session runs as the agent user: without this, history and the seed
+  // would fail silently.
+  it('creates the volume owned by the operator, through the Project’s own image', () => {
+    expect(script).toContain(`docker volume create ${STATE_VOLUME}`)
+    expect(script).toContain(`--entrypoint chown -v ${STATE_VOLUME}:/state 'sandcastle:todo'`)
+    expect(script).toContain('"$(id -u):$(id -g)" /state')
+  })
+
+  it('touches nothing when the volume is already there', () => {
+    expect(script.startsWith(`if ! docker volume inspect ${STATE_VOLUME}`)).toBe(true)
   })
 })
 
@@ -265,9 +411,10 @@ describe('startScript', () => {
     expect(script).toContain("docker compose --env-file '/home/op/.sandcastle-vps/.env' up -d")
   })
 
-  it('makes sure the login volume exists before compose looks for it', () => {
+  it('makes sure both volumes exist before compose looks for them', () => {
     expect(script.indexOf('docker volume inspect')).toBeLessThan(script.indexOf('compose'))
     expect(script).toContain(ensureClaudeVolumeScript())
+    expect(script).toContain(ensureStateVolumeScript('sandcastle:todo'))
   })
 })
 
@@ -507,7 +654,13 @@ describe('writeSessionArtifacts', () => {
     const written = ran
       .filter((call) => call.script.includes("cat > '/home/op/.sandcastle-vps/sessions/todo'/"))
       .map((call) => call.script.split('/').at(-1))
-    expect(written).toEqual(['compose.yaml', 'session-init.sh', 'profile.sh'])
+    expect(written).toEqual([
+      'compose.yaml',
+      'session-init.sh',
+      'profile.sh',
+      'session-state.sh',
+      'tmux.conf',
+    ])
     expect(ran.find((call) => call.script.endsWith('session-init.sh'))?.stdin).toBe(sessionInit())
   })
 })
