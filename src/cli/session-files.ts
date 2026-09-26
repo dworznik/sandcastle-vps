@@ -3,6 +3,7 @@
 import { gitSetupCommand } from '../git-setup.js'
 import type { Connector } from './connectors/types.js'
 import { fail, secretsDir } from './install.js'
+import { MEMORY_PORT, MEMORY_SERVICE } from './memory-address.js'
 import { PLATFORM_NETWORK } from './network.js'
 import type { TargetProfile } from './profiles.js'
 import { shellQuote } from './shell.js'
@@ -99,6 +100,42 @@ export const TMUX_FILE = 'tmux.conf'
 export const STATE_VOLUME = 'sandcastle-vps-session-state'
 export const STATE_DIR = '/home/agent/.session-state'
 export const TMUX_SEEDED_MARKER = '.tmux.conf.seeded'
+
+/**
+ * The loopback forwarder to the shared Memory (ADR 0010). The claude-mem
+ * plugin's hooks check health on 127.0.0.1:37777 and nowhere else, and
+ * spawn a worker of their own when nothing answers there, so pointing the
+ * plugin at the service by name does not work. Instead, something answers
+ * on the Session's own loopback and carries each connection to the service.
+ *
+ * A sidecar rather than a process in the session container: it shares that
+ * container's network namespace (`network_mode: service:session`), so
+ * 127.0.0.1 inside the Session is its listener and `memory` resolves as the
+ * Session resolves it — and the Project image and the session container's
+ * process table are left alone, which is what "no worker process is ever
+ * spawned inside the session container" wants. socat with `fork` connects
+ * per connection, so a Memory restart needs nothing of it; the container
+ * restarts with the Session. One cost, stated: a container sharing another's
+ * namespace does not follow it through a `docker restart` of the session
+ * container alone — restart the compose project, which restarts both.
+ *
+ * Pinned. alpine/socat is the socat maintainers' own image on Docker Hub,
+ * published for amd64 and arm64.
+ */
+export const FORWARDER_IMAGE = 'alpine/socat:1.8.0.1'
+
+/**
+ * socat's two addresses. Bound to loopback only, so the forwarder is not a
+ * way onto the worker from the platform network; and the target is the
+ * service *by name*, never the worker's own loopback — so a request through
+ * here reaches the worker from the Session's network address, and the
+ * worker's loopback-only admin routes refuse a restart asked for from a
+ * Session. That refusal is intended for a shared service.
+ */
+export const forwarderCommand = (): readonly string[] => [
+  `TCP-LISTEN:${MEMORY_PORT},bind=127.0.0.1,fork,reuseaddr`,
+  `TCP:${MEMORY_SERVICE}:${MEMORY_PORT}`,
+]
 
 /** Compose project and container name, both. Distinct from the stack's
  *  project by construction, which is what keeps `--remove-orphans` away. */
@@ -210,6 +247,20 @@ services:
       # Shell state — history, and the operator's dotfiles if present — shared
       # the same way; the one place the platform seeds anything, once.
       - ${STATE_VOLUME}:${STATE_DIR}
+    restart: unless-stopped
+
+  # The loopback forwarder to the shared Memory (ADR 0010): what answers on
+  # 127.0.0.1:${MEMORY_PORT} inside the Session, so the unmodified claude-mem plugin
+  # sees a healthy local worker and never spawns one. It shares the session
+  # container's network namespace and carries each connection to the Memory
+  # service by name. No label: status lists Sessions by the label above.
+  memory-forwarder:
+    image: ${FORWARDER_IMAGE}
+    container_name: ${quoted(`${sessionProject(name)}-memory-forwarder`)}
+    network_mode: "service:session"
+    depends_on:
+      - session
+    command: ${JSON.stringify([...forwarderCommand()])}
     restart: unless-stopped
 
 volumes:

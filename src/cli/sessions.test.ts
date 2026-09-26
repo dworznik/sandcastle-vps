@@ -9,9 +9,11 @@ import { PLATFORM_NETWORK } from './network.js'
 import type { Choice, Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
 import { SANDBOX_SIGNING_KEY_PATH, gitSetupCommand } from '../git-setup.js'
+import { MEMORY_PORT, MEMORY_SERVICE } from './memory.js'
 import {
   CLAUDE_HOME,
   CLAUDE_VOLUME,
+  FORWARDER_IMAGE,
   RUN_TOKEN_KEY,
   SESSION_LABEL,
   SESSION_SIGNING_KEY_PATH,
@@ -34,6 +36,7 @@ import {
   startScript,
   stateSetupCommand,
   stopScript,
+  forwarderCommand,
   tmuxConf,
   writeDevcontainerScript,
   writeSessionArtifacts,
@@ -74,9 +77,15 @@ const environmentKeys = (compose: string): string[] =>
 describe('sessionCompose', () => {
   const compose = sessionCompose(spec)
 
-  it("is one container from the Project's own image", () => {
+  // The Session itself is the one container from the Project's image; the
+  // other service in the file is the Memory forwarder, on its own pinned
+  // utility image, and nothing is built from anything else.
+  it("is one container from the Project's own image, plus the forwarder", () => {
     expect(compose).toContain('image: "sandcastle:todo"')
-    expect(compose.match(/^    image: /gmu)).toHaveLength(1)
+    expect(compose.match(/^    image: .*$/gmu)).toEqual([
+      '    image: "sandcastle:todo"',
+      `    image: ${FORWARDER_IMAGE}`,
+    ])
   })
 
   // The stack's `up --remove-orphans` reaches every container in its own
@@ -156,6 +165,78 @@ describe('sessionCompose', () => {
 
   it('quotes a name a shell or YAML would otherwise read', () => {
     expect(sessionCompose({ ...spec, name: 'my.app' })).toContain('hostname: "my.app"')
+  })
+})
+
+describe('the Memory forwarder', () => {
+  const compose = sessionCompose(spec)
+  /** The forwarder service's block alone, so an assertion about it cannot
+   *  be satisfied by the session service above it. */
+  const forwarder = compose.split('  memory-forwarder:\n')[1]?.split(/\n\S/u)[0] ?? ''
+
+  // The plugin's hooks dial 127.0.0.1:37777 and spawn a worker of their own
+  // when nothing answers there (ADR 0010). This is what answers.
+  it('is a second container in the Session’s compose project', () => {
+    expect(forwarder).not.toBe('')
+    expect(forwarder).toContain(`image: ${FORWARDER_IMAGE}`)
+  })
+
+  it('shares the session container’s loopback, so 127.0.0.1 inside the Session is it', () => {
+    expect(forwarder).toContain('network_mode: "service:session"')
+  })
+
+  const command = forwarderCommand().join(' ')
+
+  it('listens on the Session’s loopback only, on the plugin’s default port', () => {
+    expect(command).toContain(`TCP-LISTEN:${MEMORY_PORT},bind=127.0.0.1`)
+  })
+
+  // The worker's admin routes accept only its own loopback. Through the
+  // forwarder a request arrives from the Session's platform-network address,
+  // so a restart asked for from a Session is refused — intended for a shared
+  // service, and this is the seam that makes it so: the target is the
+  // service by name, never the worker's own loopback.
+  it('forwards to the Memory service by name over the platform network, never to its loopback', () => {
+    expect(command).toContain(`TCP:${MEMORY_SERVICE}:${MEMORY_PORT}`)
+    expect(command).not.toMatch(/TCP:(?:127\.0\.0\.1|localhost)/u)
+  })
+
+  it('connects per connection, so a restarted Memory needs nothing of it', () => {
+    expect(command).toContain('fork')
+    expect(command).toContain('reuseaddr')
+  })
+
+  it('starts with the Session and comes back with it', () => {
+    expect(forwarder).toContain('depends_on:\n      - session')
+    expect(forwarder).toContain('restart: unless-stopped')
+  })
+
+  it('pins the image', () => {
+    expect(FORWARDER_IMAGE).toMatch(/^alpine\/socat:\d+\.\d+\.\d+\.\d+$/u)
+  })
+
+  // status finds Sessions by that label, and would list the Session twice.
+  it('does not carry the Session label', () => {
+    expect(forwarder).not.toContain(SESSION_LABEL)
+  })
+
+  it('carries no credential and no volume: it moves bytes and holds nothing', () => {
+    expect(forwarder).not.toContain('environment:')
+    expect(forwarder).not.toContain('volumes:')
+  })
+
+  // A Run's Sandbox is built from the same image and started by the Harness;
+  // neither the image nor the stack knows the forwarder exists.
+  it('leaves Sandboxes untouched: nothing but the Session compose mentions it', async () => {
+    const extras = await readFile(
+      new URL('../../docker/sandbox/extras.Dockerfile', import.meta.url),
+      'utf8',
+    )
+    const stack = await readFile(new URL('../../compose.yaml', import.meta.url), 'utf8')
+    for (const file of [extras, stack]) {
+      expect(file).not.toContain('socat')
+      expect(file).not.toContain(String(MEMORY_PORT))
+    }
   })
 })
 
