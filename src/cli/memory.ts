@@ -1,5 +1,6 @@
 import type { Connector } from './connectors/types.js'
 import { fail } from './exec.js'
+import { MEMORY_PORT, MEMORY_SERVICE } from './memory-address.js'
 import { PLATFORM_NETWORK } from './network.js'
 import { readToggles } from './posture.js'
 import { CLAUDE_HOME, CLAUDE_VOLUME } from './session-files.js'
@@ -31,10 +32,7 @@ import { onHarnessImage } from './verify.js'
  */
 
 export const MEMORY_PROJECT = 'sandcastle-vps-memory'
-export const MEMORY_SERVICE = 'memory'
-/** The port the plugin's worker serves on, and the one its hooks dial on
- *  loopback; the forwarder of #93 maps one to the other. */
-export const MEMORY_PORT = 37777
+export { MEMORY_PORT, MEMORY_SERVICE } from './memory-address.js'
 
 /** Where the worker keeps its store inside the container: the plugin's own
  *  default beside `~/.claude` — CLAUDE_HOME's parent, spelled out because
