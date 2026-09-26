@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { GIT_SETUP_COMMAND, SANDBOX_SIGNING_KEY_PATH, agentSandbox } from './agent.js'
 import type { AgentCredentials } from './env.js'
+import { INSTALL_HOOKS_COMMAND, SANDBOX_HOOKS_FILE } from './run-logs/hooks.js'
 
 const complete: AgentCredentials = {
   agentToken: 'sk-ant-oat01-token',
@@ -12,9 +13,12 @@ const complete: AgentCredentials = {
 
 const keyExists = (path: string) => path === complete.signingKeyPath
 
+/** The Run's hooks file, on the Target. */
+const observe = { hooksFile: '/home/op/work/todo/.sandcastle/runs/01K5A/hooks.jsonl' }
+
 describe('agentSandbox', () => {
   it('hands the Sandbox the identity as environment, not as files in the checkout', () => {
-    expect(agentSandbox(complete, keyExists).env).toEqual({
+    expect(agentSandbox(complete, observe, keyExists).env).toEqual({
       CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-token',
       GH_TOKEN: 'github_pat_token',
       AGENT_GIT_NAME: 'Patryk Dwórznik',
@@ -23,18 +27,32 @@ describe('agentSandbox', () => {
   })
 
   it('mounts the signing key read-only, from the path it has on the Target', () => {
-    expect(agentSandbox(complete, keyExists).mounts).toEqual([
-      {
-        hostPath: '/srv/sandcastle-vps/secrets/agent_signing_key',
-        sandboxPath: SANDBOX_SIGNING_KEY_PATH,
-        readonly: true,
-      },
-    ])
+    expect(agentSandbox(complete, observe, keyExists).mounts).toContainEqual({
+      hostPath: '/srv/sandcastle-vps/secrets/agent_signing_key',
+      sandboxPath: SANDBOX_SIGNING_KEY_PATH,
+      readonly: true,
+    })
   })
 
-  it('configures git in the Sandbox before the agent starts', () => {
-    const { hooks } = agentSandbox(complete, keyExists)
-    expect(hooks.sandbox?.onSandboxReady).toEqual([{ command: GIT_SETUP_COMMAND }])
+  // The file, not the run directory: the agent gets to append its own
+  // account of the Run and nothing else. The Harness's records beside it
+  // stay out of the Sandbox's reach.
+  it('mounts the hooks file writable, and only that file of the run directory', () => {
+    const { mounts } = agentSandbox(complete, observe, keyExists)
+    expect(mounts).toContainEqual({
+      hostPath: observe.hooksFile,
+      sandboxPath: SANDBOX_HOOKS_FILE,
+      readonly: false,
+    })
+    expect(mounts).toHaveLength(2)
+  })
+
+  it('configures git and installs the hooks in the Sandbox before the agent starts', () => {
+    const { hooks } = agentSandbox(complete, observe, keyExists)
+    expect(hooks.sandbox?.onSandboxReady).toEqual([
+      { command: GIT_SETUP_COMMAND },
+      { command: INSTALL_HOOKS_COMMAND },
+    ])
   })
 
   // sandcastle echoes each hook command into the Run's log, so a token
@@ -63,17 +81,17 @@ describe('agentSandbox', () => {
       ['signingKeyPath', 'AGENT_SIGNING_KEY'],
     ] as const)('refuses the Run and names %s by the key that sets it', (field, key) => {
       const { [field]: _dropped, ...partial } = complete
-      expect(() => agentSandbox(partial, keyExists)).toThrow(key)
+      expect(() => agentSandbox(partial, observe, keyExists)).toThrow(key)
     })
 
     it('names every missing value at once rather than one per attempt', () => {
-      expect(() => agentSandbox({}, keyExists)).toThrow(
+      expect(() => agentSandbox({}, observe, keyExists)).toThrow(
         /CLAUDE_CODE_OAUTH_TOKEN, GH_TOKEN, AGENT_GIT_NAME, AGENT_GIT_EMAIL, AGENT_SIGNING_KEY/,
       )
     })
 
     it('says how to fix it rather than only what is wrong', () => {
-      expect(() => agentSandbox({}, keyExists)).toThrow(/npx @dworznik\/sandcastle-vps/)
+      expect(() => agentSandbox({}, observe, keyExists)).toThrow(/npx @dworznik\/sandcastle-vps/)
     })
   })
 
@@ -81,7 +99,7 @@ describe('agentSandbox', () => {
   // without this the Sandbox would start with an empty directory where the key
   // should be and fail deep inside the agent's first commit.
   it('refuses a signing key path with no file at it', () => {
-    expect(() => agentSandbox(complete, () => false)).toThrow(
+    expect(() => agentSandbox(complete, observe, () => false)).toThrow(
       /\/srv\/sandcastle-vps\/secrets\/agent_signing_key.*no file there/s,
     )
   })

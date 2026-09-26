@@ -40,6 +40,10 @@ Publishing a completed Run's Task Branch as a pull request: the branch reaches t
 
 The branch a Run's work is proposed against: what its Task Branch is cut from, and what its Delivery opens the pull request against. A Base is an input to a Run, defaulting to the Project remote's default branch — never inherited from whatever branch the shared checkout happens to be sitting on.
 
+### Run Log
+
+Everything kept about one Run: the phases the Harness took it through, what the agent did inside the Sandbox, and the session transcript. Kept by the Harness under the Project and reachable by the id the Dispatch answered with, so the link exists before the Run starts. The Orchestrator records that a Run happened and how it ended; the Run Log records what happened inside it.
+
 ### Sandbox
 
 The isolated container sandcastle spawns for a single Run, containing the agent (Claude Code) and the Project's worktree. Ephemeral — exists only for the duration of the Run — and built from the Project's own image, never a shared one. Distinct from a Session, which is attended and outlives any one agent invocation.

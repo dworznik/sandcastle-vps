@@ -1,12 +1,14 @@
+import { readFile } from 'node:fs/promises'
 import { zValidator } from '@hono/zod-validator'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { serve as serveInngest } from 'inngest/hono'
 import { z } from 'zod'
-import { env } from './env.js'
+import { env, secretValues } from './env.js'
 import { sandcastleRun } from './functions/run.js'
 import { inngest, runRequested, runRequestedData } from './inngest.js'
 import { listProjects, resolveProject } from './projects.js'
+import { locateRun, redact, resolveRunFile, runPageUrl, validateRunId } from './run-logs/run-dir.js'
 
 /**
  * The two effects a Dispatch has, injected so the routes can be exercised
@@ -22,15 +24,43 @@ export interface AppDeps {
   readonly resolveProject: (project: string) => Promise<unknown>
   /** Every checkout under the workspace root, Onboarded or not. */
   readonly listProjects: () => Promise<unknown>
+  /** The run directory for an id, under whichever Project holds it. */
+  readonly locateRun: (id: string) => Promise<string | undefined>
+  /** Where the run page for an id is, from the Harness's own port. */
+  readonly runPageUrl: (id: string) => string
+  /** The credential values, scrubbed from every served file. A Run writes
+   *  its own files scrubbed already; sandcastle's log is written by
+   *  sandcastle, and this is where it gets the same treatment. */
+  readonly secrets: readonly string[]
 }
 
 const liveDeps: AppDeps = {
   dispatch: (data) => inngest.send(runRequested.create(data)),
   resolveProject: (project) => resolveProject(env.workspaceRoot, project),
   listProjects: () => listProjects(env.workspaceRoot),
+  locateRun: (id) => locateRun(env.workspaceRoot, id),
+  runPageUrl: (id) => runPageUrl(env.port, id),
+  secrets: secretValues(env.credentials),
 }
 
 const detail = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+/** The run page, read once. It ships in `src/` beside this file — a single
+ *  dependency-free HTML file that fetches its Run's `events.jsonl` itself. */
+let runPage: Promise<string> | undefined
+const loadRunPage = (): Promise<string> => {
+  runPage ??= readFile(new URL('./run-logs/page.html', import.meta.url), 'utf8')
+  return runPage
+}
+
+const isRunId = (id: string): boolean => {
+  try {
+    validateRunId(id)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export const createApp = (deps: AppDeps = liveDeps): Hono => {
   const app = new Hono()
@@ -104,7 +134,9 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
         return c.json({ error: detail(error) }, 400)
       }
       const { ids } = await deps.dispatch(data)
-      return c.json({ ids }, 202)
+      // The link, before the Run starts: the run directory is keyed by this
+      // id, so the live tail is one click away from the moment of Dispatch.
+      return c.json({ ids, logs: ids.map((id) => deps.runPageUrl(id)) }, 202)
     },
   )
 
@@ -112,6 +144,44 @@ export const createApp = (deps: AppDeps = liveDeps): Hono => {
   // Hono would otherwise answer them with a bare 404, which reads as "no such
   // endpoint" rather than "wrong verb".
   app.all('/dispatch', (c) => c.json({ error: 'Use POST' }, 405))
+
+  /**
+   * A Run's directory, by the id its Dispatch answered with. Loopback only,
+   * like everything else here: the tunnel the operator already opens for the
+   * dashboard is the access path, and the Orchestrator's run page links here.
+   *
+   * The page is served for any well-formed id, started or not: the link is
+   * handed out at Dispatch, and a queued Run has no directory yet. The page
+   * tails `events.jsonl` itself and says so until it appears. The files are
+   * served only once they exist, and only the ones a Run writes.
+   */
+  const servePage = async (c: Context) =>
+    isRunId(c.req.param('id') ?? '')
+      ? c.html(await loadRunPage())
+      : c.json({ error: 'Not a run id' }, 404)
+  app.get('/runs/:id', servePage)
+  app.get('/runs/:id/*', async (c) => {
+    const id = c.req.param('id')
+    const rest = c.req.path.slice(`/runs/${id}/`.length)
+    if (rest === '') return servePage(c)
+    if (!isRunId(id)) return c.json({ error: 'Not a run id' }, 404)
+    const dir = await deps.locateRun(id)
+    if (!dir) return c.json({ error: `No Run ${id}` }, 404)
+    const file = resolveRunFile(dir, rest)
+    if (!file) return c.json({ error: `No such file in Run ${id}` }, 404)
+    let content: string
+    try {
+      content = await readFile(file.path, 'utf8')
+    } catch {
+      return c.json({ error: `Run ${id} has not written ${rest}` }, 404)
+    }
+    // Read whole rather than streamed, so a secret cannot straddle two
+    // chunks and slip past the scrub. These files run to megabytes at most,
+    // on loopback.
+    c.header('content-type', file.contentType)
+    c.header('cache-control', 'no-store')
+    return c.body(redact(content, deps.secrets))
+  })
 
   // The Orchestrator's side of the same server: sync, introspection, and the
   // invocation of each Run. It reaches this by service name over the compose

@@ -106,6 +106,13 @@ describe('onboardScript', () => {
     expect(script).toContain('extras.Dockerfile >> .sandcastle/Dockerfile')
   })
 
+  // `sandcastle init` ignores logs/ and worktrees/; the run directories a Run
+  // keeps beside them would otherwise show as untracked in every checkout.
+  it('ignores the run directories in the scaffolded .gitignore', () => {
+    expect(script).toContain('>> .sandcastle/.gitignore')
+    expect(script).toMatch(/runs\/.*>> \.sandcastle\/\.gitignore/u)
+  })
+
   // A Project carries no credentials (ADR 0006); a stale copy of a token the
   // Harness already holds is worse than none.
   it('writes no .env into the Project', () => {

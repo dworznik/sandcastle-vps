@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp, type AppDeps } from './app.js'
 
 const dispatched = () => vi.fn(async () => ({ ids: ['01JQ8ZK0'] }))
@@ -8,6 +11,9 @@ const app = (overrides: Partial<AppDeps> = {}) =>
     dispatch: dispatched(),
     resolveProject: async () => ({}),
     listProjects: async () => [],
+    locateRun: async () => undefined,
+    runPageUrl: (id) => `http://127.0.0.1:3000/runs/${id}`,
+    secrets: ['sk-ant-oat01-fixture-token'],
     ...overrides,
   })
 
@@ -94,7 +100,10 @@ describe('POST /dispatch', () => {
     )
 
     expect(response.status).toBe(202)
-    expect(await response.json()).toEqual({ ids: ['01JQ8ZK0'] })
+    expect(await response.json()).toEqual({
+      ids: ['01JQ8ZK0'],
+      logs: ['http://127.0.0.1:3000/runs/01JQ8ZK0'],
+    })
     expect(dispatch).toHaveBeenCalledWith({ project: 'todo-app', task: 'Fix the flaky login test' })
   })
 
@@ -170,5 +179,95 @@ describe('POST /dispatch', () => {
     expect(response.status).toBe(500)
     expect(await response.json()).toEqual({ error: 'Dispatch failed' })
     vi.restoreAllMocks()
+  })
+})
+
+/**
+ * A Run's directory, served back by the id the Dispatch answered with. The
+ * page is a viewer for an id, so it is served for any well-formed one and
+ * tails the events itself — the link is handed out before the Run starts,
+ * and a queued Run has no directory yet. The files are served only once
+ * they exist.
+ */
+describe('GET /runs', () => {
+  let dir: string
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'sandcastle-app-'))
+    await writeFile(join(dir, 'events.jsonl'), '{"type":"run.started"}\n')
+    // sandcastle writes this one itself, so it is the file only the route
+    // can scrub. Token-shaped and under 80 characters, per .gitleaks.toml.
+    await writeFile(join(dir, 'sandcastle.log'), 'started\n$ echo sk-ant-oat01-fixture-token\n')
+    await mkdir(join(dir, 'session', 'subagents'), { recursive: true })
+    await writeFile(join(dir, 'session', 'sess-1.jsonl'), '{"type":"user"}\n')
+    await writeFile(join(dir, 'session', 'subagents', 'agent-a1.jsonl'), '{}\n')
+  })
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const located = () => app({ locateRun: async (id) => (id === '01K5A' ? dir : undefined) })
+
+  it('serves the run page for an id, whether or not its Run has started', async () => {
+    for (const path of ['/runs/01K5A', '/runs/01K5A/', '/runs/01K5NOTYET']) {
+      const response = await located().request(path)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toContain('text/html')
+      expect(await response.text()).toContain('events.jsonl')
+    }
+  })
+
+  it('answers 404 to an id that could not be a run id', async () => {
+    const response = await located().request('/runs/..%2Fetc')
+    expect(response.status).toBe(404)
+  })
+
+  it('serves the events as newline-delimited JSON', async () => {
+    const response = await located().request('/runs/01K5A/events.jsonl')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/x-ndjson')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.text()).toBe('{"type":"run.started"}\n')
+  })
+
+  it("serves sandcastle's rendered log as text", async () => {
+    const response = await located().request('/runs/01K5A/sandcastle.log')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(await response.text()).toBe('started\n$ echo [redacted]\n')
+  })
+
+  // The Run scrubs what it writes; sandcastle's own log is written by
+  // sandcastle, so the route is the one place every served file goes through.
+  it('scrubs the Harness’s secrets from whatever it serves', async () => {
+    const text = await (await located().request('/runs/01K5A/sandcastle.log')).text()
+    expect(text).not.toContain('sk-ant-oat01-fixture-token')
+  })
+
+  it('serves the transcript and the subagent transcripts under session/', async () => {
+    expect((await located().request('/runs/01K5A/session/sess-1.jsonl')).status).toBe(200)
+    expect((await located().request('/runs/01K5A/session/subagents/agent-a1.jsonl')).status).toBe(
+      200,
+    )
+  })
+
+  it('answers 404 for a Run no Project has', async () => {
+    const response = await located().request('/runs/01K5B/events.jsonl')
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'No Run 01K5B' })
+  })
+
+  it('answers 404 for a file a Run does not write, or has not written yet', async () => {
+    expect((await located().request('/runs/01K5A/stream.jsonl')).status).toBe(404)
+    expect((await located().request('/runs/01K5A/index.html')).status).toBe(404)
+    expect((await located().request('/runs/01K5A/session/notes.txt')).status).toBe(404)
+    expect((await located().request('/runs/01K5A/..%2F..%2F.env')).status).toBe(404)
+  })
+
+  it('changes nothing — a Dispatch is the only thing that queues a Run', async () => {
+    const dispatch = dispatched()
+    await app({ dispatch, locateRun: async () => dir }).request('/runs/01K5A/events.jsonl')
+    expect(dispatch).not.toHaveBeenCalled()
   })
 })

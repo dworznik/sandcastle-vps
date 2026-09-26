@@ -84,6 +84,12 @@ export interface Env {
   readonly credentials: Partial<AgentCredentials>
 }
 
+/** The credential values that are secrets — the two tokens. The author
+ *  identity and the key's path are not, and the key itself never leaves its
+ *  file. Whatever a Run writes or serves is scrubbed of these. */
+export const secretValues = (credentials: Partial<AgentCredentials>): string[] =>
+  [credentials.agentToken, credentials.githubToken].filter((value): value is string => !!value)
+
 /** The environment key each credential is read from, for error messages that
  *  name something the operator can actually go and set. */
 export const CREDENTIAL_KEYS: Readonly<Record<keyof AgentCredentials, string>> = {
