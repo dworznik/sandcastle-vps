@@ -1,4 +1,4 @@
-import type { Connector } from './connectors/types.js'
+import type { Connector, ExecResult } from './connectors/types.js'
 import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js'
 import { composeScript, harnessPort, readEnvScript } from './install.js'
 import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
@@ -86,6 +86,42 @@ export interface StatusSession {
   readonly connector: Connector
 }
 
+/** The two answers "is anything installed here" is decided from. */
+export interface InstallProbe {
+  readonly version: ExecResult
+  readonly env: ExecResult
+  readonly targetVersion?: string
+  readonly envContent: string
+  /** False when neither probe found anything — a Target this CLI has never
+   *  installed to, or one that could not be reached; `version.code` tells
+   *  the two apart, since both reads succeed on a bare Target. */
+  readonly installed: boolean
+}
+
+/**
+ * One reading of the Target that every action which needs it installed
+ * shares, so none of them can disagree with `status` about whether it is.
+ * Never throws: the callers decide what an unreachable Target means to them.
+ */
+export const probeInstall = async (
+  connector: Connector,
+  installDir: string,
+): Promise<InstallProbe> => {
+  const [version, env] = await Promise.all([
+    connector.exec(versionScript(installDir)),
+    connector.exec(readEnvScript(installDir)),
+  ])
+  const targetVersion = parseProbe(version.stdout).version?.trim() || undefined
+  const envContent = env.stdout
+  return {
+    version,
+    env,
+    targetVersion,
+    envContent,
+    installed: Boolean(targetVersion) || envContent.trim() !== '',
+  }
+}
+
 /**
  * Ask the Target everything, in one pass.
  *
@@ -98,19 +134,17 @@ export const gatherStatus = async ({
   profile,
   connector,
 }: StatusSession): Promise<StatusReport> => {
-  const [version, env] = await Promise.all([
-    connector.exec(versionScript(profile.installDir)),
-    connector.exec(readEnvScript(profile.installDir)),
-  ])
-  const targetVersion = parseProbe(version.stdout).version?.trim()
-  const envContent = env.stdout
+  const { version, targetVersion, envContent, installed } = await probeInstall(
+    connector,
+    profile.installDir,
+  )
   const cliVersion = await packageVersion()
 
   // Both probes answer for a Target that is reachable and bare — one prints an
   // empty version, the other `cat`s a file that is not there and succeeds
   // anyway. A *non-zero* exit is the connection itself failing, which is a
   // different thing to tell the operator than "nothing is installed".
-  if (!targetVersion && !envContent.trim()) {
+  if (!installed) {
     const unreachable = version.code !== 0
     return {
       target: profile.name,

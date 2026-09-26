@@ -32,6 +32,7 @@ interface Connector {
   exec(script: string, opts?: { stdin?: string | Readable; sudo?: boolean }): Promise<ExecResult>
   putTar(stream: Readable, destDir: string): Promise<void>
   preflight(): Promise<Preflight>
+  attach?(script: string): Promise<number>
 }
 ```
 

@@ -31,8 +31,9 @@ import { readEnv } from './target-env.js'
  *  finds them: the engine, not the stack's compose project. */
 export const SESSION_LABEL = 'sandcastle-vps.session'
 
-/** The tmux session inside the container. One per Session; `new-session -A`
- *  attaches to it when it exists and creates it when it does not. */
+/** What tmux calls the one thing its server holds per Session — its own
+ *  term, not the glossary's. `new-session -A` attaches to it when it exists
+ *  and creates it when it does not. */
 const TMUX_SESSION = 'main'
 
 /** Compose project and container name, both. Distinct from the stack's
@@ -211,7 +212,7 @@ printf 'state\\tstarted\\n'`
 
 /**
  * What runs on the Target's terminal to land in the Session: exec into the
- * container with a TTY, and attach to its tmux session or create it. TERM is
+ * container with a TTY, and attach to its tmux server or start it. TERM is
  * the operator's, carried by ssh, so colours and keys inside match the
  * terminal outside.
  */

@@ -1,5 +1,5 @@
 import type { Connector } from './connectors/types.js'
-import { fail, harnessPort, readEnvScript } from './install.js'
+import { fail, harnessPort } from './install.js'
 import { parseProjects, projectsScript } from './onboard.js'
 import { readToggles } from './posture.js'
 import { parseProbe } from './preflight.js'
@@ -14,7 +14,7 @@ import {
   stopScript,
   writeSessionArtifacts,
 } from './session-files.js'
-import { versionScript } from './status.js'
+import { probeInstall } from './status.js'
 
 /**
  * The menu's "Sessions": the flow that opens a Session on a Project — start
@@ -46,14 +46,9 @@ export const sessionsMenu = async (
   { profile, connector, prompter }: SessionsSession,
   log: Log = console.log,
 ): Promise<SessionsOutcome | undefined> => {
-  // The same two probes `status` decides "installed" from.
-  const [version, current] = await Promise.all([
-    connector.exec(versionScript(profile.installDir)),
-    connector.exec(readEnvScript(profile.installDir)),
-  ])
-  if (current.code !== 0) throw fail('Reading the Target', current.code, current.stderr)
-  const envContent = current.stdout
-  if (!parseProbe(version.stdout).version?.trim() && !envContent.trim()) {
+  const { env, envContent, installed } = await probeInstall(connector, profile.installDir)
+  if (env.code !== 0) throw fail('Reading the Target', env.code, env.stderr)
+  if (!installed) {
     log('\nNothing is installed here. Run install/upgrade first.')
     return undefined
   }
