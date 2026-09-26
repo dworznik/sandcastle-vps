@@ -96,7 +96,7 @@ export const parseFacts = (stdout: string): TargetFacts => {
  * empty placeholders over them would be an install that logs the operator out.
  *
  * The two toggles are seeded off (ADR 0010): a fresh Target is Run-only, and
- * seeding is what keeps one the operator enabled enabled across an upgrade.
+ * seeding is what carries a toggle the operator turned on across an upgrade.
  */
 export const desiredEnv = (
   profile: TargetProfile,

@@ -60,7 +60,7 @@ const POSTURE_LABEL: Readonly<Record<Posture, string>> = {
   workstation: 'Workstation Target',
 }
 
-export const state = (enabled: boolean): string => (enabled ? 'on' : 'off')
+export const onOff = (enabled: boolean): string => (enabled ? 'on' : 'off')
 
 export const describePosture = (toggles: Toggles): string =>
-  `${POSTURE_LABEL[posture(toggles)]} — sessions ${state(toggles.sessions)}, access ${state(toggles.access)}`
+  `${POSTURE_LABEL[posture(toggles)]} — sessions ${onOff(toggles.sessions)}, access ${onOff(toggles.access)}`

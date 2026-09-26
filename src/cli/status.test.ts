@@ -180,7 +180,7 @@ describe('gatherStatus', () => {
   // report has to say which of those two situations this is.
   it('reports the platform network absent on an install that predates it', async () => {
     const { report } = await gather({ network: '' })
-    expect(report.network).toEqual({ present: false, attached: [] })
+    expect(report.network).toEqual({ present: false })
     const said = formatStatus(report)
     expect(said).toContain('sandcastle-vps')
     expect(said).toContain('not there')

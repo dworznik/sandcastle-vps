@@ -28,7 +28,14 @@ interface Ran {
   readonly stdin: string
 }
 
-const fakeConnector = (env: string | undefined = INSTALLED, code = 0) => {
+interface TargetState {
+  readonly env?: string
+  /** What the version probe prints; empty for a Target with no package. */
+  readonly version?: string
+  readonly code?: number
+}
+
+const fakeConnector = ({ env = INSTALLED, version = '0.1.0', code = 0 }: TargetState = {}) => {
   const ran: Ran[] = []
   const connector: Connector = {
     kind: 'ssh',
@@ -37,8 +44,11 @@ const fakeConnector = (env: string | undefined = INSTALLED, code = 0) => {
       if (code !== 0) {
         return Promise.resolve({ code, stdout: '', stderr: 'ssh: connect to host vps port 22' })
       }
+      if (script.includes('"version"')) {
+        return Promise.resolve({ code: 0, stdout: `version\t${version}\n`, stderr: '' })
+      }
       if (script.includes('/.env') && script.startsWith('cat ')) {
-        return Promise.resolve({ code: 0, stdout: env ?? '', stderr: '' })
+        return Promise.resolve({ code: 0, stdout: env, stderr: '' })
       }
       return Promise.resolve({ code: 0, stdout: '', stderr: '' })
     },
@@ -76,9 +86,9 @@ const fakePrompter = (pick: Toggle | null, { confirmed = true }: { confirmed?: b
 
 const run = async (
   pick: Toggle | null,
-  { env, code, confirmed }: { env?: string; code?: number; confirmed?: boolean } = {},
+  { confirmed, ...target }: TargetState & { confirmed?: boolean } = {},
 ) => {
-  const { connector, ran } = fakeConnector(env, code)
+  const { connector, ran } = fakeConnector(target)
   const { prompter, asked } = fakePrompter(pick, { confirmed })
   const lines: string[] = []
   const result = await toggleFromMenu({ profile, connector, prompter }, (line) => lines.push(line))
@@ -142,12 +152,22 @@ describe('toggleFromMenu', () => {
 
   // The criterion: against a Target this CLI has never installed to, say so
   // rather than writing a toggle into a file the stack does not read yet.
+  // Decided from the same two probes `status` decides it from.
   it('says nothing is installed, rather than failing obscurely', async () => {
-    const { result, written, shown, asked } = await run('sessions', { env: '' })
+    const { result, written, shown, asked } = await run('sessions', { env: '', version: '' })
     expect(shown).toContain('Nothing is installed here')
     expect(written).toBeUndefined()
     expect(asked).toEqual([])
     expect(result).toBeUndefined()
+  })
+
+  // `status` calls a Target with the package delivered installed, whatever the
+  // environment file says; so does this, and the toggle it writes seeds the
+  // file the next install/upgrade fills in.
+  it('treats a delivered package with no environment file as installed, as status does', async () => {
+    const { result, written } = await run('access', { env: '' })
+    expect(readToggles(written ?? '')).toEqual({ sessions: false, access: true })
+    expect(result).toEqual({ sessions: false, access: true })
   })
 
   it('tells an unreachable Target apart from an empty one', async () => {

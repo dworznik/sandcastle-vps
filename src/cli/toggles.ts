@@ -3,14 +3,16 @@ import { fail, readEnvScript, writeTargetEnv } from './install.js'
 import {
   TOGGLES,
   describePosture,
+  onOff,
   readToggles,
-  state,
   writeToggle,
   type Toggle,
   type Toggles,
 } from './posture.js'
+import { parseProbe } from './preflight.js'
 import type { TargetProfile } from './profiles.js'
 import type { Prompter } from './prompt.js'
+import { versionScript } from './status.js'
 
 /**
  * The menu's "Sessions and access": the flow that flips one of the two
@@ -43,15 +45,20 @@ export const toggleFromMenu = async (
   { profile, connector, prompter }: ToggleSession,
   log: Log = console.log,
 ): Promise<Toggles | undefined> => {
-  const current = await connector.exec(readEnvScript(profile.installDir))
-  // The read swallows a missing file and succeeds; a non-zero exit is the
-  // connection itself, which is a different thing to say than "not installed".
+  // The same two probes `status` decides "installed" from, so the two cannot
+  // disagree about a Target: both reads swallow a missing file and succeed,
+  // so a non-zero exit is the connection itself, which is a different thing
+  // to say than "not installed".
+  const [version, current] = await Promise.all([
+    connector.exec(versionScript(profile.installDir)),
+    connector.exec(readEnvScript(profile.installDir)),
+  ])
   if (current.code !== 0) throw fail('Reading the Target', current.code, current.stderr)
   const existing = current.stdout
-  if (!existing.trim()) {
+  if (!parseProbe(version.stdout).version?.trim() && !existing.trim()) {
     log(
-      '\nNothing is installed here — the install directory holds no environment file.' +
-        '\nRun install/upgrade first; the toggles live in what it writes.',
+      '\nNothing is installed here — the install directory holds no package and no' +
+        '\nenvironment file. Run install/upgrade first; the toggles live in what it writes.',
     )
     return undefined
   }
@@ -61,7 +68,7 @@ export const toggleFromMenu = async (
 
   const picked = await prompter.select('Sessions and access', [
     ...TOGGLES.map((toggle) => ({
-      label: `${toggle}: ${state(toggles[toggle])} — ${toggles[toggle] ? 'disable' : 'enable'} it`,
+      label: `${toggle}: ${onOff(toggles[toggle])} — ${toggles[toggle] ? 'disable' : 'enable'} it`,
       value: toggle as Toggle | null,
     })),
     { label: 'Back', value: null },
@@ -77,8 +84,11 @@ export const toggleFromMenu = async (
     }
   }
 
-  await writeTargetEnv(connector, profile.installDir, writeToggle(existing, picked, enabling))
-  const updated = { ...toggles, [picked]: enabling }
-  log(`\n${picked} is now ${state(enabling)}. ${describePosture(updated)}`)
+  const written = writeToggle(existing, picked, enabling)
+  await writeTargetEnv(connector, profile.installDir, written)
+  // Read back from what was written rather than assembled here, so what this
+  // reports is what `status` will read.
+  const updated = readToggles(written)
+  log(`\n${picked} is now ${onOff(enabling)}. ${describePosture(updated)}`)
   return updated
 }

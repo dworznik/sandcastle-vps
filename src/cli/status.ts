@@ -121,7 +121,7 @@ export const gatherStatus = async ({
       projects: [],
       missingCredentials: [],
       toggles: OFF,
-      network: { present: false, attached: [] },
+      network: { present: false },
     }
   }
 
@@ -251,18 +251,18 @@ export const formatStatus = (report: StatusReport): string => {
   // every Session and the Memory service, meet on it by name (ADR 0010).
   lines.push('', 'Network')
   if (!report.network.present) {
+    // Usually an install from before the network existed; the remedy is the
+    // same either way.
     lines.push(
-      `  ${PLATFORM_NETWORK.padEnd(24)}not there — this install predates the platform network;`,
-      '                          run install/upgrade to create it and move the stack onto it',
+      `  ${PLATFORM_NETWORK.padEnd(24)}not there — run install/upgrade to create it and move`,
+      '                          the stack onto it',
     )
   } else {
     const joined =
       report.network.attached.length === 0
         ? 'nothing attached'
         : `joined by ${report.network.attached.join(', ')}`
-    lines.push(
-      `  ${PLATFORM_NETWORK.padEnd(24)}${report.network.driver ?? 'unknown driver'}, ${joined}`,
-    )
+    lines.push(`  ${PLATFORM_NETWORK.padEnd(24)}${report.network.driver}, ${joined}`)
   }
   return lines.join('\n')
 }

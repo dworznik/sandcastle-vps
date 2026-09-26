@@ -38,16 +38,20 @@ export const retireDefaultNetworkScript = (): string =>
 export const networkScript = (): string =>
   `docker network inspect -f '{{.Name}}\t{{.Driver}}{{range .Containers}}\t{{.Name}}{{end}}' ${PLATFORM_NETWORK} 2> /dev/null || true`
 
-export interface PlatformNetwork {
-  readonly present: boolean
-  readonly driver?: string
-  /** Container names, as Docker reports them. */
-  readonly attached: readonly string[]
-}
+/** Present with what Docker reported, or absent — a Target whose install
+ *  predates the network, or one where it was removed by hand. */
+export type PlatformNetwork =
+  | { readonly present: false }
+  | {
+      readonly present: true
+      readonly driver: string
+      /** Container names, as Docker reports them. */
+      readonly attached: readonly string[]
+    }
 
 export const parseNetwork = (stdout: string): PlatformNetwork => {
   const line = stdout.trim().split('\n')[0]?.trim()
-  if (!line) return { present: false, attached: [] }
-  const [, driver, ...attached] = line.split('\t')
-  return { present: true, driver: driver || undefined, attached: attached.filter(Boolean) }
+  if (!line) return { present: false }
+  const [, driver = '', ...attached] = line.split('\t')
+  return { present: true, driver, attached: attached.filter(Boolean) }
 }

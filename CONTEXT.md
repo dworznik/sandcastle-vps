@@ -81,6 +81,11 @@ A Target that executes Runs and nothing else. It holds agent credentials only, s
 
 A Target that also hosts Sessions and the Memory. Two things set it apart from a Run-only Target, and both are why the operator must trust it: it holds the operator's own Claude login, and it exposes the Docker socket to containers built from Projects' own Dockerfiles. Enabled deliberately, never by installing.
 
+### Posture
+
+Which of the two kinds of Target a Target currently is: Run-only, or Workstation. Set by the Target's two toggles, `sessions` and `access`, and reported by status; `access` alone does not change it, since a Run-only Target with Access is still Run-only.
+_Avoid_: mode, tier
+
 ### Memory
 
 The one store of what the agent observed across Sessions on a Target, and the service that keeps it. Shared by every Session; kept distinct per Project. A Run does not write to it — a Run's record is its Run Log.
@@ -96,6 +101,10 @@ One of the operator's devices admitted to a Target's Access. Added and revoked o
 ### Exposed Service
 
 A service on the Target reachable over Access. Nothing is exposed unless it is listed; the Dispatch surface is never listed.
+
+### Platform Network
+
+The one Docker network on a Target that every part of the platform joins by name — the stack, each Session, the Memory — so they resolve one another without sharing the Target's own network. Created by the install and owned by no one compose project, so no part of the platform takes it down.
 
 ### Connector
 

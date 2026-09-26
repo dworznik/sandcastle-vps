@@ -15,6 +15,14 @@ describe('PLATFORM_NETWORK', () => {
     const compose = await readFile(new URL('../../compose.yaml', import.meta.url), 'utf8')
     expect(compose).toMatch(new RegExp(`name: ${PLATFORM_NETWORK}\\n\\s+external: true`, 'u'))
   })
+
+  // The network compose made before this existed was named after the compose
+  // project, and the install retires it by that name — so the project name
+  // is the third place the string lives.
+  it('is also the compose project name, which the retired network was named after', async () => {
+    const compose = await readFile(new URL('../../compose.yaml', import.meta.url), 'utf8')
+    expect(compose).toMatch(new RegExp(`^name: ${PLATFORM_NETWORK}$`, 'mu'))
+  })
 })
 
 describe('ensureNetworkScript', () => {
@@ -60,8 +68,8 @@ describe('parseNetwork', () => {
   // An install that predates the network answers nothing, and the report has
   // to say so rather than showing an empty line.
   it('reports absence when the Target printed nothing', () => {
-    expect(parseNetwork('')).toEqual({ present: false, attached: [] })
-    expect(parseNetwork('\n')).toEqual({ present: false, attached: [] })
+    expect(parseNetwork('')).toEqual({ present: false })
+    expect(parseNetwork('\n')).toEqual({ present: false })
   })
 })
 
