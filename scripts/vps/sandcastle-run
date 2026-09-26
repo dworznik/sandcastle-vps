@@ -74,30 +74,40 @@ fi
 # an SSH tunnel and point SANDCASTLE_DISPATCH_URL at your end of it.
 dispatch_urls+=("http://127.0.0.1:${PORT:-3000}")
 
-# Two different failures must read differently: a harness that cannot be
-# reached (try the next URL) and a harness that answered with a rejection —
-# the Project is not Onboarded, the payload is malformed — which is final and
-# carries the reason in its body. `curl -f` would collapse both into "failed",
-# so the status is read explicitly and the body is always shown.
+# Three different answers must read differently: a harness that cannot be
+# reached (try the next URL); a harness that is up but whose Orchestrator has
+# not synced it yet — 503, for a few seconds after the stack starts — which is
+# "not yet" and worth waiting on; and a rejection — the Project is not
+# Onboarded, the payload is malformed — which is final and carries the reason
+# in its body. `curl -f` would collapse all three into "failed", so the status
+# is read explicitly and the body is always shown.
 for url in "${dispatch_urls[@]}"; do
-  response="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST "$url/dispatch" \
-    -H 'content-type: application/json' -d "$payload" 2> /dev/null)" || continue
-  status="${response##*$'\n'}"
-  body="${response%$'\n'*}"
-  case "$status" in
-    2*)
-      echo "Dispatched to $url: $body"
-      # The run page, on the Harness's own loopback port. Through a tunnel
-      # that maps the same local port it opens as printed; through one that
-      # maps a different port, swap the port.
-      jq -r '.logs[]? | "Run logs: \(.)"' <<< "$body" 2> /dev/null || true
-      exit 0
-      ;;
-    *)
-      echo "The harness at $url rejected the Dispatch (HTTP $status): $body" >&2
-      exit 1
-      ;;
-  esac
+  for attempt in $(seq 1 15); do
+    response="$(curl -sS --max-time 10 -w '\n%{http_code}' -X POST "$url/dispatch" \
+      -H 'content-type: application/json' -d "$payload" 2> /dev/null)" || continue 2
+    status="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    case "$status" in
+      2*)
+        echo "Dispatched to $url: $body"
+        # The run page, on the Harness's own loopback port. Through a tunnel
+        # that maps the same local port it opens as printed; through one that
+        # maps a different port, swap the port.
+        jq -r '.logs[]? | "Run logs: \(.)"' <<< "$body" 2> /dev/null || true
+        exit 0
+        ;;
+      503)
+        [ "$attempt" -eq 1 ] && echo "The harness at $url is not ready yet; waiting: $body" >&2
+        [ "$attempt" -lt 15 ] && sleep 2
+        ;;
+      *)
+        echo "The harness at $url rejected the Dispatch (HTTP $status): $body" >&2
+        exit 1
+        ;;
+    esac
+  done
+  echo "Gave up waiting for the harness at $url to become ready: $body" >&2
+  exit 1
 done
 
 echo "Failed to reach the sandcastle harness at: ${dispatch_urls[*]}" >&2

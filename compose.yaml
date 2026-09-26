@@ -95,6 +95,20 @@ services:
       # The Dispatch surface is keyless — reachability is its access control —
       # so it is published on Target loopback and nowhere else.
       - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'
+    # Orchestrator first, Harness second — and the order is not what closes the
+    # cold-start window (#44). Measured on a cold stack: the Orchestrator's
+    # event API is up and accepting events about 3.5 seconds before it has
+    # synced the Harness, and an event accepted in that window is stored but
+    # never routed — no Run is created for it, and nothing replays it once the
+    # Harness syncs. So the Harness asks the Orchestrator whether it is synced
+    # before every Dispatch and answers 503 until it is (src/orchestrator.ts).
+    #
+    # Inverting this dependency — a healthcheck on the Harness, the Orchestrator
+    # waiting on `service_healthy` — would only shrink the window, not close
+    # it: the Orchestrator still accepts events between coming up and finishing
+    # its first sync. And it would cost the dashboard whenever the Harness
+    # cannot start, which is the moment an operator most wants to look at
+    # something. Keeping the Orchestrator independent keeps it available.
     depends_on:
       - inngest
     restart: unless-stopped
