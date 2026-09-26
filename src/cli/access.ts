@@ -1,4 +1,5 @@
 import type { Connector } from './connectors/types.js'
+import { fail } from './exec.js'
 import { parseUdpListeners, type Listener } from './listeners.js'
 import { PLATFORM_NETWORK } from './network.js'
 import { readToggles } from './posture.js'
@@ -343,9 +344,6 @@ export const parseUdpTables = (stdout: string): Listener[] => {
 export const accessStateScript = (installDir: string): string =>
   `${accessComposeScript(installDir, "ps --format '{{.Service}}\\t{{.State}}'")} 2> /dev/null || true`
 
-const failed = (what: string, code: number, stderr: string): Error =>
-  new Error(`${what} failed (exit ${code}): ${stderr.trim().split('\n').at(-1) ?? 'no output'}`)
-
 /**
  * Bring the Access service up, or up to date: write what it reads, then
  * build and start it. Idempotent, and asks nothing — the install runs this on
@@ -366,22 +364,30 @@ export const accessUp = async (
     const written = await connector.exec(writeAccessFileScript(installDir, file), {
       stdin: content,
     })
-    if (written.code !== 0) throw failed(`Writing access/${file}`, written.code, written.stderr)
+    if (written.code !== 0) throw fail(`Writing access/${file}`, written.code, written.stderr)
   }
   const peers = await connector.exec(ensurePeersFileScript(installDir))
-  if (peers.code !== 0) throw failed('Creating access/peers.conf', peers.code, peers.stderr)
+  if (peers.code !== 0) throw fail('Creating access/peers.conf', peers.code, peers.stderr)
 
   log(`\nBuilding the Access image and starting WireGuard on udp/${port}…`)
   const up = await connector.exec(accessComposeScript(installDir, 'up -d --build'))
-  if (up.code !== 0) throw failed('docker compose up (access)', up.code, up.stderr)
+  if (up.code !== 0) throw fail('docker compose up (access)', up.code, up.stderr)
 }
 
-/** Stop the service. `down` without `-v`: the server key stays in its volume,
- *  so enabling access again brings the same identity back and existing Peer
- *  configs keep working. */
+/** `down` without `-v`: the server key stays in its volume, so enabling
+ *  access again brings the same identity back and existing Peer configs keep
+ *  working. Nothing to do on a Target where the service was never brought up
+ *  — a toggle set by hand, or an enable whose `up` failed before the compose
+ *  file was written — rather than a `cd` into a directory that is not there. */
+export const accessDownScript = (installDir: string): string => `set -eu
+cd ${shellQuote(accessDir(installDir))} 2> /dev/null || exit 0
+[ -f compose.yaml ] || exit 0
+docker compose down`
+
+/** Stop the service, keeping the server key. */
 export const accessDown = async (connector: Connector, installDir: string): Promise<void> => {
-  const down = await connector.exec(accessComposeScript(installDir, 'down'))
-  if (down.code !== 0) throw failed('docker compose down (access)', down.code, down.stderr)
+  const down = await connector.exec(accessDownScript(installDir))
+  if (down.code !== 0) throw fail('docker compose down (access)', down.code, down.stderr)
 }
 
 // -------------------------------------------------------------------- status

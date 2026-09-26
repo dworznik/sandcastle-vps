@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { accessUp } from './access.js'
 import type { Connector } from './connectors/types.js'
+import { fail } from './exec.js'
 import { ensureNetworkScript, PLATFORM_NETWORK } from './network.js'
 import { packSelf, packageVersion } from './package.js'
 import { readToggles, seededToggles } from './posture.js'
@@ -198,10 +199,9 @@ export interface InstallSession {
   readonly connector: Connector
 }
 
-/** One shape for "a command on the Target did not work", so the credential
- *  step and the install report a failed `exec` the same way. */
-export const fail = (what: string, code: number, stderr: string): Error =>
-  new Error(`${what} failed (exit ${code}): ${stderr.trim().split('\n').at(-1) ?? 'no output'}`)
+/** Re-exported from its own module so the flows that already import it from
+ *  here keep working; see exec.ts for why it moved. */
+export { fail } from './exec.js'
 
 /** Ship this package's own contents to the Target — the package *is* the
  *  Harness (ADR 0006), so this is the whole of "install the software". */

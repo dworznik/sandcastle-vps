@@ -6,6 +6,7 @@ import {
   TUNNEL_SUBNET,
   WIREGUARD_PORT,
   accessCompose,
+  accessDownScript,
   accessPort,
   accessStateScript,
   accessUp,
@@ -237,6 +238,16 @@ describe('scripts', () => {
     const script = ensurePeersFileScript(INSTALL_DIR)
     expect(script).toContain(`[ -f '${INSTALL_DIR}/access/peers.conf' ] ||`)
     expect(script).not.toContain('cat >')
+  })
+
+  // A toggle set by hand, or an enable whose `up` failed early, leaves no
+  // compose file; disabling then has nothing to stop and must not fail.
+  it('takes the service down, and does nothing where it was never brought up', () => {
+    const script = accessDownScript(INSTALL_DIR)
+    expect(script).toContain('docker compose down')
+    expect(script).not.toMatch(/down -v|--volumes/u)
+    expect(script).toContain('[ -f compose.yaml ] || exit 0')
+    expect(script).toContain('|| exit 0')
   })
 
   it('reads the service state without starting it', () => {
