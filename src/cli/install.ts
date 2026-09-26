@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { accessUp } from './access.js'
 import type { Connector } from './connectors/types.js'
 import { fail } from './exec.js'
+import { memoryUp } from './memory.js'
 import { ensureNetworkScript, PLATFORM_NETWORK } from './network.js'
 import { packSelf, packageVersion } from './package.js'
 import { readToggles, seededToggles } from './posture.js'
@@ -269,6 +270,9 @@ export const provision = async (
   // The Access service is built from the package too, so an upgrade rebuilds
   // it where the toggle is on. Its server key is in a volume and survives.
   if (readToggles(content).access) await accessUp(connector, profile.installDir, content, log)
+  // And the Memory service, which travels with sessions (ADR 0010). Its
+  // store is in a volume or the operator's own directory, and survives.
+  if (readToggles(content).sessions) await memoryUp(connector, profile.installDir, content, log)
 
   const port = harnessPort(content)
   log('\nChecking it from here…')

@@ -680,13 +680,31 @@ describe('applySessions', () => {
     expect(ran.some((call) => call.script === ensureClaudeVolumeScript())).toBe(true)
     expect(shown).toContain(FIRST_TIME)
     expect(shown).toContain('claude auth login')
+    expect(shown).toContain('claude plugin install claude-mem@thedotmack')
   })
 
-  // Disabling gates new Sessions; it neither stops running ones nor forgets
-  // the login, which would make re-enabling a second first-time setup.
-  it('keeps the volume and the running Sessions when sessions is disabled', async () => {
+  // Memory travels with sessions (ADR 0010): the worker comes up with the
+  // toggle, after the volume it runs the plugin out of exists.
+  it('brings the Memory service up after the volume, when sessions is enabled', async () => {
+    const { ran } = await apply(true)
+    const scripts = ran.map((call) => call.script)
+    const volume = scripts.indexOf(ensureClaudeVolumeScript())
+    const up = scripts.findIndex((script) => script.includes('/memory') && script.includes('up -d'))
+    expect(up).toBeGreaterThan(volume)
+    expect(ran.find((call) => call.script.includes('memory/compose.yaml'))?.stdin).toContain(
+      'sandcastle-vps-memory',
+    )
+  })
+
+  // Disabling gates new Sessions and stops the worker; it neither stops
+  // running Sessions nor forgets the login or the store, which would make
+  // re-enabling a second first-time setup.
+  it('stops Memory but keeps the volume, the store and the running Sessions when sessions is disabled', async () => {
     const { ran, shown } = await apply(false)
-    expect(ran).toEqual([])
+    expect(ran).toHaveLength(1)
+    expect(ran[0]?.script).toContain('/memory')
+    expect(ran[0]?.script).toContain(' down')
+    expect(ran[0]?.script).not.toContain('down -v')
     expect(shown).toContain('is kept')
     expect(shown).toContain('keep running')
   })

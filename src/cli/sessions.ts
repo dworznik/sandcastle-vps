@@ -1,5 +1,6 @@
 import type { Connector } from './connectors/types.js'
-import { fail, harnessPort } from './install.js'
+import { fail, harnessPort, readEnvScript } from './install.js'
+import { MEMORY_SERVICE, memoryDown, memoryUp } from './memory.js'
 import { parseProjects, projectsScript } from './onboard.js'
 import { readToggles } from './posture.js'
 import { parseProbe } from './preflight.js'
@@ -23,14 +24,17 @@ import { probeInstall } from './status.js'
  *  platform runs none of it and seeds nothing into `~/.claude` (ADR 0010). */
 export const FIRST_TIME = [
   'First time on this Target, inside any Session:',
-  '  claude auth login          — one login serves every Session, and refreshes itself',
-  '  claude plugin install …    — the plugins you use; the image carries only skills',
+  '  claude auth login                          — one login serves every Session, and refreshes itself',
+  '  claude plugin install claude-mem@thedotmack — the Memory service runs this plugin out of the volume',
+  '  claude plugin install …                    — the other plugins you use; the image carries only skills',
   'Nothing is seeded into ~/.claude: what you set up there is yours.',
 ].join('\n')
 
 /**
- * The `sessions` toggle's hook: enabling creates the shared login volume;
- * disabling keeps it, so the login is still there when sessions comes back.
+ * The `sessions` toggle's hook: enabling creates the shared login volume and
+ * brings the Memory service up, since Memory travels with Sessions (ADR
+ * 0010); disabling stops the service and keeps the volume and the store, so
+ * the login and the observations are still there when sessions comes back.
  * Running Sessions are not stopped by disabling — stop is explicit, on the
  * Sessions menu — and the toggle only gates opening new ones.
  */
@@ -40,7 +44,9 @@ export const applySessions = async (
   log: Log = console.log,
 ): Promise<void> => {
   if (!enabled) {
-    log(`\nThe login volume ${CLAUDE_VOLUME} is kept, so a login survives sessions being off.`)
+    await memoryDown(connector, profile.installDir)
+    log(`\nThe Memory service is stopped; its store is kept.`)
+    log(`The login volume ${CLAUDE_VOLUME} is kept, so a login survives sessions being off.`)
     log('Running Sessions keep running; stop them from the Sessions menu.')
     return
   }
@@ -49,6 +55,15 @@ export const applySessions = async (
     throw fail(`Creating the ${CLAUDE_VOLUME} volume`, created.code, created.stderr)
   }
   log(`\nThe shared login volume ${CLAUDE_VOLUME} is there, for every Session on ${profile.name}.`)
+  // The hook runs after the toggle is written, so the environment file this
+  // reads already says sessions is on.
+  const env = await connector.exec(readEnvScript(profile.installDir))
+  if (env.code !== 0) throw fail('Reading the Target', env.code, env.stderr)
+  await memoryUp(connector, profile.installDir, env.stdout, log)
+  log(
+    `The Memory service is up as \`${MEMORY_SERVICE}\` on the platform network; it waits for the` +
+      '\nplugin below to be installed, and says so in its log until it is.',
+  )
   log(`\n${FIRST_TIME}`)
 }
 

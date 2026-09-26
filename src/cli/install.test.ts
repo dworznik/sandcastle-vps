@@ -359,6 +359,29 @@ describe('provision', () => {
     expect(calls.map((call) => call.script)).not.toContainEqual(expect.stringContaining('/access'))
   })
 
+  // The Memory service travels with sessions (ADR 0010) and is built from
+  // the package too: an upgrade rebuilds it where sessions is on, with the
+  // compose file regenerated from the Target's current Local Config.
+  it('brings the Memory service up on an upgrade of a Target with sessions on', async () => {
+    const on = writeToggle(upsertAllEnv('', desiredEnv(profile, facts), 'seed'), 'sessions', true)
+    const { connector, calls } = fakeTarget(on)
+    await provision({ profile, connector }, silent, quick)
+    const scripts = calls.map((call) => call.script)
+    expect(scripts).toContainEqual(expect.stringContaining(`${profile.installDir}/memory`))
+    expect(scripts).toContainEqual(
+      expect.stringContaining(`cd '${profile.installDir}/memory' && docker compose --env-file`),
+    )
+    expect(
+      scripts.find((script) => script.includes('/memory') && script.includes('up -d')),
+    ).toContain('--build')
+  })
+
+  it('leaves Memory alone on a Run-only Target', async () => {
+    const { connector, calls } = fakeTarget()
+    await provision({ profile, connector }, silent, quick)
+    expect(calls.map((call) => call.script)).not.toContainEqual(expect.stringContaining('/memory'))
+  })
+
   // The Harness image is built from the delivered package, so an upgrade that
   // did not rebuild would start the old code from the new files.
   it('rebuilds the Harness image, so a newer package takes effect', async () => {

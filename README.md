@@ -143,9 +143,12 @@ The Claude credential is the exception. A Session must **not** carry `CLAUDE_COD
 **First time on a fresh Workstation Target**, inside any Session — the platform runs none of this and seeds nothing into `~/.claude`:
 
 ```bash
-claude auth login            # once; every Session on this Target is then logged in
-claude plugin install <…>    # the plugins you use; the image carries only skills
+claude auth login                              # once; every Session on this Target is then logged in
+claude plugin install claude-mem@thedotmack    # the Memory service runs this plugin out of the volume
+claude plugin install <…>                      # the other plugins you use; the image carries only skills
 ```
+
+**Memory.** One claude-mem worker serves every Session on the Target — not one per container, which would be N writers on one SQLite file ([ADR 0010](docs/adr/0010-the-platform-is-the-operators-agent-vps.md)). It comes up with the `sessions` toggle and goes down with it, as its own compose project, `sandcastle-vps-memory`, on the platform network, where a Session reaches it as `memory`. The platform ships only the runtime — bun, the `claude` CLI and uv for Chroma's Python, in `docker/memory/` — and the container mounts the same `sandcastle-vps-claude` volume the Sessions do and runs the _installed plugin's own_ worker script out of it. So plugin and worker cannot drift: install the plugin once from any Session, as above, and update it there too; a restart of the service (`docker compose restart` in `<install dir>/memory`, or disabling and enabling `sessions`) runs whatever version is installed, and `status` reports the version the worker answers with. Until the plugin is installed the service waits, saying so in its log every minute, rather than crash-looping; `status` says the same. The worker summarises unattended, so it gets the Run token like a Run does — the one container on a Workstation Target besides a Sandbox that carries `CLAUDE_CODE_OAUTH_TOKEN`. Its store is a named volume, `sandcastle-vps-memory`, unless `MEMORY_DATA_DIR` in the Target's `.env` names a directory to use as is, which is how an existing claude-mem store is kept at cutover. Runs never write to it: a Run's memory is its Run Log. A Session's hooks reach the worker on loopback through a forwarder, which is the next slice.
 
 **What persists.** A Session's shell state outlives its container, the Project's image, and an upgrade: a second external volume, `sandcastle-vps-session-state`, mounted at `~/.session-state` in every Session on the Target, holds your bash history (in bash's own format, appended as you type, so a window that dies with the container keeps what was typed in it) and, if you put them there, a `.bashrc` and a `.tmux.conf`. The Session's startup files source the `.bashrc` after the image's own, so yours wins, and link `~/.tmux.conf` to the volume's; remove either and the Session is back on the image's defaults. Both files are shared by every Project's Session, as the login is. A tmux config is seeded into the volume once, when none exists, and from that moment it is yours: edit it and the edits survive every start and upgrade; delete it and nothing writes it again. That seed is the one thing the platform ever writes into your config ([ADR 0010](docs/adr/0010-the-platform-is-the-operators-agent-vps.md)); a Session start otherwise changes nothing in the volume, which you can check by diffing it. The login shell inside a Session is bash. claude-tmux's zsh history is not carried over, by decision.
 
@@ -165,7 +168,7 @@ Rotating the signing key regenerates it on the Target and waits for the new one 
 
 Rotation is also the way out of a signing key the install refuses to keep: one with a passphrase, or of the wrong type.
 
-### 7. Access
+### 8. Access
 
 Access is a WireGuard VPN on the Target, provisioned and managed by the CLI, through which your own devices reach the Target's Exposed Services by plain HTTP at the tunnel address — no SSH tunnel per session, no certificate or login per service. It is a per-Target toggle, independent of Sessions: a Run-only Target with its dashboard reachable from your phone is a real configuration. See [ADR 0011](docs/adr/0011-wireguard-access-to-exposed-services.md).
 
