@@ -10,9 +10,13 @@ runs:
 
     - uses: actions/setup-node@v7
       with:
-        # The minimum this package declares it supports, and the base the
-        # sandbox images are built from.
-        node-version: 22
+        # The Active LTS, and the same major the Harness runs on a Target
+        # (docker/harness/Dockerfile) and the floor the package declares
+        # (`engines.node` in package.json). The three move together, by hand:
+        # a floating `lts/*` here or `node:lts` there would let CI and a Target
+        # installed a month apart drift onto different majors. Next move is 26,
+        # Active LTS from 2026-10-28.
+        node-version: 24
         cache: pnpm
 
     - run: pnpm install --frozen-lockfile
