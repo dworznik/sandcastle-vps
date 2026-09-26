@@ -12,6 +12,7 @@ import {
   writeEnvScript,
   type TargetFacts,
 } from './install.js'
+import { readToggles, writeToggle } from './posture.js'
 import type { TargetProfile } from './profiles.js'
 import { readEnv, upsertAllEnv } from './target-env.js'
 
@@ -81,6 +82,15 @@ describe('desiredEnv', () => {
     })
   })
 
+  // A fresh Target is Run-only (ADR 0010). Seeded off rather than left out so
+  // the file names both toggles.
+  it('seeds both toggles off', () => {
+    expect(readToggles(upsertAllEnv('', desiredEnv(profile, facts), 'seed'))).toEqual({
+      sessions: false,
+      access: false,
+    })
+  })
+
   // An install runs before the wizard has captured anything and again after.
   // Writing empty placeholders for the credentials would, on the second run,
   // be seeding — which keeps them — but the intent has to be visible here:
@@ -118,6 +128,12 @@ describe('a re-run against an installed Target', () => {
     expect(readEnv(second, 'GH_TOKEN')).toBe('github_pat_captured')
   })
 
+  it('keeps a toggle the operator enabled', () => {
+    const enabled = writeToggle(first, 'sessions', true)
+    const second = upsertAllEnv(enabled, desiredEnv(profile, facts), 'seed')
+    expect(readToggles(second)).toEqual({ sessions: true, access: false })
+  })
+
   it('keeps a value the operator edited by hand', () => {
     const edited = upsertAllEnv(first, { WORKSPACE_ROOT: '/srv/projects' }, 'rotate')
     expect(
@@ -138,6 +154,16 @@ describe('divergences', () => {
 
   it('says nothing about a fresh Target', () => {
     expect(divergences('', desiredEnv(profile, facts))).toEqual([])
+  })
+
+  // A toggle is the operator's to set; keeping it is not a divergence.
+  it('says nothing about a toggle the operator enabled', () => {
+    const existing = writeToggle(
+      upsertAllEnv('', desiredEnv(profile, facts), 'seed'),
+      'access',
+      true,
+    )
+    expect(divergences(existing, desiredEnv(profile, facts))).toEqual([])
   })
 
   it('says nothing about a Target that agrees', () => {
@@ -285,6 +311,34 @@ describe('provision', () => {
       expect.stringContaining('docker compose up -d --build --remove-orphans'),
     )
     expect(checks.every((check) => check.ok)).toBe(true)
+  })
+
+  // Compose declares the platform network external, so a stack brought up
+  // before the network exists is a stack that refuses to start.
+  it('creates the platform network before bringing the stack up', async () => {
+    const { connector, calls } = fakeTarget()
+    await provision({ profile, connector }, silent, quick)
+    const scripts = calls.map((call) => call.script)
+    const created = scripts.findIndex((script) => script.includes('docker network create'))
+    const up = scripts.findIndex((script) => script.includes('compose up'))
+    expect(created).toBeGreaterThanOrEqual(0)
+    expect(created).toBeLessThan(up)
+  })
+
+  it('stops rather than starting a stack whose network could not be made', async () => {
+    const { connector, calls } = fakeTarget('', {
+      'docker network create': {
+        code: 1,
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+      },
+    })
+    await expect(provision({ profile, connector }, silent, quick)).rejects.toThrow(
+      /Cannot connect to the Docker daemon/,
+    )
+    expect(calls.map((call) => call.script)).not.toContainEqual(
+      expect.stringContaining('compose up'),
+    )
   })
 
   // The Harness image is built from the delivered package, so an upgrade that

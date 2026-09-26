@@ -1,6 +1,8 @@
 import { createReadStream } from 'node:fs'
 import type { Connector } from './connectors/types.js'
+import { ensureNetworkScript, PLATFORM_NETWORK } from './network.js'
 import { packSelf, packageVersion } from './package.js'
+import { seededToggles } from './posture.js'
 import { describeTarget, type TargetProfile } from './profiles.js'
 import { parseProbe } from './preflight.js'
 import { shellQuote } from './shell.js'
@@ -92,6 +94,9 @@ export const parseFacts = (stdout: string): TargetFacts => {
  * What this install would write, if the file were empty. Credentials are
  * absent on purpose: the wizard captures those, and an install that wrote
  * empty placeholders over them would be an install that logs the operator out.
+ *
+ * The two toggles are seeded off (ADR 0010): a fresh Target is Run-only, and
+ * seeding is what carries a toggle the operator turned on across an upgrade.
  */
 export const desiredEnv = (
   profile: TargetProfile,
@@ -104,6 +109,7 @@ export const desiredEnv = (
   DOCKER_GID: facts.dockerGid,
   INNGEST_EVENT_KEY: facts.inngestEventKey,
   INNGEST_SIGNING_KEY: facts.inngestSigningKey,
+  ...seededToggles(),
 })
 
 /** A setting the Target already has that this install would have written
@@ -245,6 +251,13 @@ export const provision = async (
   const content = upsertAllEnv(existing, desired, 'seed')
   await writeTargetEnv(connector, profile.installDir, content)
   log(`Wrote ${profile.installDir}/.env (mode 600) and ${secretsDir(profile.installDir)}.`)
+
+  // Before `up`: compose declares the network external and refuses to start
+  // the stack until it exists. A no-op on a Target that already has it.
+  const network = await connector.exec(ensureNetworkScript())
+  if (network.code !== 0) {
+    throw fail(`Creating the ${PLATFORM_NETWORK} network`, network.code, network.stderr)
+  }
 
   log('\nBuilding the Harness image and starting the stack…')
   const up = await connector.exec(

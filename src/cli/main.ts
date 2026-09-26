@@ -8,6 +8,7 @@ import { addProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { rotateCredentials } from './rotate.js'
 import { reportStatus } from './status.js'
+import { toggleFromMenu } from './toggles.js'
 import { formatPreflight, remedyCommand } from './preflight.js'
 import { createPrompter, type Prompter } from './prompt.js'
 import {
@@ -211,6 +212,7 @@ const menu = async (session: Session): Promise<void> => {
       { label: 'Install / upgrade', value: 'install' as const },
       { label: 'Add a Project', value: 'project' as const },
       { label: 'Rotate credentials', value: 'rotate' as const },
+      { label: 'Sessions and access', value: 'toggles' as const },
       { label: 'Status', value: 'status' as const },
       { label: 'Quit', value: 'quit' as const },
     ])
@@ -235,6 +237,9 @@ const menu = async (session: Session): Promise<void> => {
         console.log(afterCredentials(profile, rotated, '\nThe Target holds the new credentials.'))
       }
     }
+    // The toggles record state and drive `status` in this slice; the slices
+    // that attach Sessions, the Memory service and Access to them follow.
+    if (action === 'toggles') await toggleFromMenu(session)
     if (action === 'status') await reportStatus(session)
   }
 }

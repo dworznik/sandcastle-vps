@@ -115,3 +115,17 @@ services:
 
 volumes:
   inngest_data:
+
+networks:
+  # The stack's only network is the platform network, which the install
+  # creates before `up` and which a Project's Session and the Memory service
+  # later join by name from their own compose projects (ADR 0010). External
+  # because compose would otherwise own it: a network made for this project
+  # goes down with it, taking every other project's name resolution along.
+  # Service names still resolve on it — compose aliases each service on every
+  # network it joins — so the Orchestrator reaches the Harness exactly as
+  # before. The name is fixed in src/cli/network.ts; a test holds the two
+  # together.
+  default:
+    name: sandcastle-vps
+    external: true
