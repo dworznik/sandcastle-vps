@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import type { Connector } from './connectors/types.js'
-import { ensureNetworkScript, PLATFORM_NETWORK, retireDefaultNetworkScript } from './network.js'
+import { ensureNetworkScript, PLATFORM_NETWORK } from './network.js'
 import { packSelf, packageVersion } from './package.js'
 import { seededToggles } from './posture.js'
 import { describeTarget, type TargetProfile } from './profiles.js'
@@ -264,10 +264,6 @@ export const provision = async (
     composeScript(profile.installDir, 'up -d --build --remove-orphans'),
   )
   if (up.code !== 0) throw fail('docker compose up', up.code, up.stderr)
-  // A Target installed before the platform network existed: `up` has just
-  // moved its containers onto the new network, and this removes the one
-  // compose made and would otherwise leave behind. Nothing on a fresh Target.
-  await connector.exec(retireDefaultNetworkScript())
 
   const port = harnessPort(content)
   log('\nChecking it from here…')

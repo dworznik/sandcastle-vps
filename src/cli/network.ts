@@ -23,16 +23,6 @@ export const PLATFORM_NETWORK = 'sandcastle-vps'
 export const ensureNetworkScript = (): string =>
   `docker network inspect ${PLATFORM_NETWORK} > /dev/null 2>&1 || docker network create ${PLATFORM_NETWORK} > /dev/null`
 
-/**
- * Remove the network compose created for the stack before the platform
- * network existed. Compose moves the containers off it on the first `up`
- * after the change and never removes it; a Target upgraded from that state
- * would otherwise carry an empty network forever. Gone already, or still in
- * use by something, is not an error here.
- */
-export const retireDefaultNetworkScript = (): string =>
-  `docker network rm ${PLATFORM_NETWORK}_default > /dev/null 2>&1 || true`
-
 /** One line — name, driver, then each attached container — or nothing at all
  *  when the network does not exist. Read-only, for `status`. */
 export const networkScript = (): string =>

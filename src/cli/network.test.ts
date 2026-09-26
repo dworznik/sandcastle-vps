@@ -1,12 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import {
-  PLATFORM_NETWORK,
-  ensureNetworkScript,
-  networkScript,
-  parseNetwork,
-  retireDefaultNetworkScript,
-} from './network.js'
+import { PLATFORM_NETWORK, ensureNetworkScript, networkScript, parseNetwork } from './network.js'
 
 describe('PLATFORM_NETWORK', () => {
   // The install creates the network and compose joins it by name. The name
@@ -15,14 +9,6 @@ describe('PLATFORM_NETWORK', () => {
     const compose = await readFile(new URL('../../compose.yaml', import.meta.url), 'utf8')
     expect(compose).toMatch(new RegExp(`name: ${PLATFORM_NETWORK}\\n\\s+external: true`, 'u'))
   })
-
-  // The network compose made before this existed was named after the compose
-  // project, and the install retires it by that name — so the project name
-  // is the third place the string lives.
-  it('is also the compose project name, which the retired network was named after', async () => {
-    const compose = await readFile(new URL('../../compose.yaml', import.meta.url), 'utf8')
-    expect(compose).toMatch(new RegExp(`^name: ${PLATFORM_NETWORK}$`, 'mu'))
-  })
 })
 
 describe('ensureNetworkScript', () => {
@@ -30,17 +16,6 @@ describe('ensureNetworkScript', () => {
     const script = ensureNetworkScript()
     expect(script).toContain(`docker network inspect ${PLATFORM_NETWORK}`)
     expect(script).toContain(`|| docker network create ${PLATFORM_NETWORK}`)
-  })
-})
-
-describe('retireDefaultNetworkScript', () => {
-  // A Target installed before the platform network still has the network
-  // compose made for the stack. Compose moves the containers off it on `up`
-  // and never removes it; the install does, and ignores it being gone.
-  it('removes the network compose used to create, and tolerates its absence', () => {
-    const script = retireDefaultNetworkScript()
-    expect(script).toContain(`docker network rm ${PLATFORM_NETWORK}_default`)
-    expect(script).toContain('|| true')
   })
 })
 

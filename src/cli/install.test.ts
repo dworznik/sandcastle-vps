@@ -341,17 +341,6 @@ describe('provision', () => {
     )
   })
 
-  // A Target installed before the platform network existed keeps the network
-  // compose made for it unless something removes it, and compose does not.
-  it('retires the network compose used to create, after the stack has moved off it', async () => {
-    const { connector, calls } = fakeTarget()
-    await provision({ profile, connector }, silent, quick)
-    const scripts = calls.map((call) => call.script)
-    const retired = scripts.findIndex((script) => script.includes('docker network rm'))
-    const up = scripts.findIndex((script) => script.includes('compose up'))
-    expect(retired).toBeGreaterThan(up)
-  })
-
   // The Harness image is built from the delivered package, so an upgrade that
   // did not rebuild would start the old code from the new files.
   it('rebuilds the Harness image, so a newer package takes effect', async () => {
