@@ -188,6 +188,8 @@ Access is a WireGuard VPN on the Target, provisioned and managed by the CLI, thr
 
 **The trade-off**, stated as ADR 0011 records it: access is network-level, not identity-level. Anyone holding a Peer config reaches every Exposed Service, and one public listener now exists — WireGuard's UDP port — on a Target where access is enabled. The install's exposure check is unchanged by it: it reads TCP listen tables, WireGuard is UDP, and DNAT creates no listener.
 
+**Coming from claude-tmux.** The one-time cutover of a Target that still runs claude-tmux is attended — it touches the running memory store, your devices and DNS — and issue #95 is its record. `scripts/cutover-from-claude-tmux.sh` walks you through it from your dev machine, one stage per step of that issue: upgrade, enable `sessions` with `MEMORY_DATA_DIR` pointed at the existing store, log in and install the plugins from a Session, enable `access` and add each device as a new Peer, set up DNS, delete claude-tmux's containers, images and volumes, and confirm your own GPG key is gone. It runs the checks that can be run over ssh after each stage, stops the old WireGuard and ddclient containers before their replacements come up (both would otherwise fight over `udp/51820` and the public record), asks before anything is deleted, and ends with the record of what was done by hand, ready to post on #95. Run it once, never from inside a claude-tmux container.
+
 ## Development
 
 ```bash
