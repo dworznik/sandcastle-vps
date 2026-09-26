@@ -241,12 +241,9 @@ const menu = async (session: Session): Promise<void> => {
         console.log(afterCredentials(profile, rotated, '\nThe Target holds the new credentials.'))
       }
     }
-    // The toggles record state and drive `status` in this slice; the slices
-    // that attach Sessions, the Memory service and Access to them follow.
     if (action === 'sessions') await sessionsMenu(session)
-    if (action === 'toggles') await toggleFromMenu(session)
     // Flipping `access` brings the WireGuard service up or down (ADR 0011);
-    // the Sessions side of the toggle is a later slice.
+    // `sessions` only records state, and Sessions read it when opened.
     if (action === 'toggles') {
       await toggleFromMenu(session, console.log, {
         access: (enabled) => applyAccess(session, enabled),
