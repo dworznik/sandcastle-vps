@@ -1,3 +1,4 @@
+import { ACCESS_OFF, formatAccess, gatherAccess, type AccessStatus } from './access.js'
 import type { Connector, ExecResult } from './connectors/types.js'
 import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js'
 import { composeScript, harnessPort, readEnvScript } from './install.js'
@@ -79,6 +80,8 @@ export interface StatusReport {
   /** The platform network, absent on a Target installed before it existed
    *  and not upgraded since. */
   readonly network: PlatformNetwork
+  /** Access (ADR 0011): the toggle, the WireGuard listener and the Peers. */
+  readonly access: AccessStatus
 }
 
 export interface StatusSession {
@@ -161,11 +164,12 @@ export const gatherStatus = async ({
       toggles: OFF,
       sessions: [],
       network: { present: false },
+      access: ACCESS_OFF,
     }
   }
 
   const port = harnessPort(envContent)
-  const [ps, apps, listeners, projects, images, network, running] = await Promise.all([
+  const [ps, apps, listeners, projects, images, network, running, access] = await Promise.all([
     connector.exec(composeScript(profile.installDir, 'ps')),
     connector.exec(appsQueryScript(profile.installDir)),
     connector.exec(LISTENERS_SCRIPT),
@@ -173,6 +177,7 @@ export const gatherStatus = async ({
     connector.exec(imagesScript()),
     connector.exec(networkScript()),
     connector.exec(listScript()),
+    gatherAccess(connector, profile.installDir, envContent),
   ])
 
   const built = new Set(
@@ -209,6 +214,7 @@ export const gatherStatus = async ({
     toggles: readToggles(envContent),
     sessions: parseSessions(running.stdout),
     network: parseNetwork(network.stdout),
+    access,
   }
 }
 
@@ -320,6 +326,10 @@ export const formatStatus = (report: StatusReport): string => {
         : `joined by ${report.network.attached.join(', ')}`
     lines.push(`  ${PLATFORM_NETWORK.padEnd(24)}${report.network.driver}, ${joined}`)
   }
+
+  // After the network, because it is what Access reaches into: the one
+  // intended public listener, and who holds a config for it (ADR 0011).
+  lines.push('', 'Access', ...formatAccess(report.access))
   return lines.join('\n')
 }
 

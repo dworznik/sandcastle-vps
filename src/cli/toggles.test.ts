@@ -92,9 +92,18 @@ const run = async (
   const { connector, ran } = fakeConnector(target)
   const { prompter, asked } = fakePrompter(pick, { confirmed })
   const lines: string[] = []
-  const result = await toggleFromMenu({ profile, connector, prompter }, (line) => lines.push(line))
+  const applied: [Toggle, boolean][] = []
+  const hook = (toggle: Toggle) => (enabled: boolean) => {
+    applied.push([toggle, enabled])
+    return Promise.resolve()
+  }
+  const result = await toggleFromMenu(
+    { profile, connector, prompter },
+    (line) => lines.push(line),
+    { sessions: hook('sessions'), access: hook('access') },
+  )
   const written = ran.find((call) => call.stdin !== '')?.stdin
-  return { result, ran, asked, written, shown: lines.join('\n') }
+  return { result, ran, asked, written, shown: lines.join('\n'), applied }
 }
 
 describe('toggleFromMenu', () => {
@@ -119,6 +128,15 @@ describe('toggleFromMenu', () => {
     expect(asked.some((question) => question.includes('Enable sessions'))).toBe(true)
     expect(written).toBeUndefined()
     expect(result).toEqual(OFF)
+  })
+
+  // The hook is what brings a service up or down; it runs after the state is
+  // written, and not at all when nothing was flipped.
+  it('runs the toggle’s hook with the new state, after writing it', async () => {
+    const { applied } = await run('access')
+    expect(applied).toEqual([['access', true]])
+    expect((await run('sessions', { confirmed: false })).applied).toEqual([])
+    expect((await run(null)).applied).toEqual([])
   })
 
   it('enables access without the sessions warning, independently of sessions', async () => {

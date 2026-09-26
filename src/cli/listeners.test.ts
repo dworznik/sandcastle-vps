@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exposedListeners, parseListeners, stackPorts } from './listeners.js'
+import { exposedListeners, parseListeners, parseUdpListeners, stackPorts } from './listeners.js'
 
 /** A `/proc/net/tcp` row, with the columns the parser reads. `0A` is LISTEN. */
 const row = (index: number, local: string, state = '0A'): string =>
@@ -9,6 +9,20 @@ const HEADER =
   '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
 
 const table = (...rows: string[]): string => [HEADER, ...rows, ''].join('\n')
+
+describe('parseUdpListeners', () => {
+  // UDP has no LISTEN state: a bound socket reports 07, and that is the one
+  // WireGuard's port shows as on a Target with Access enabled.
+  it('reads a bound UDP socket, which reports TCP_CLOSE rather than LISTEN', () => {
+    expect(parseUdpListeners(table(row(0, '00000000:CA6C', '07')))).toEqual([
+      { address: '0.0.0.0', port: 51820, loopback: false },
+    ])
+  })
+
+  it('ignores a TCP LISTEN row, which cannot appear in a UDP table anyway', () => {
+    expect(parseUdpListeners(table(row(0, '00000000:CA6C', '0A')))).toEqual([])
+  })
+})
 
 describe('parseListeners', () => {
   it('decodes a little-endian IPv4 address and its hex port', () => {

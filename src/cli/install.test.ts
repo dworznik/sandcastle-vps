@@ -341,6 +341,24 @@ describe('provision', () => {
     )
   })
 
+  // The Access service is built from the package as well, and its toggle is
+  // the operator's: an upgrade brings it back up where it was on, and leaves
+  // the Target alone where it was off.
+  it('brings the Access service up on an upgrade of a Target with access on', async () => {
+    const on = writeToggle(upsertAllEnv('', desiredEnv(profile, facts), 'seed'), 'access', true)
+    const { connector, calls } = fakeTarget(on)
+    await provision({ profile, connector }, silent, quick)
+    expect(calls.map((call) => call.script)).toContainEqual(
+      expect.stringContaining(`cd '${profile.installDir}/access' && docker compose up -d --build`),
+    )
+  })
+
+  it('leaves Access alone on a Target with access off', async () => {
+    const { connector, calls } = fakeTarget()
+    await provision({ profile, connector }, silent, quick)
+    expect(calls.map((call) => call.script)).not.toContainEqual(expect.stringContaining('/access'))
+  })
+
   // The Harness image is built from the delivered package, so an upgrade that
   // did not rebuild would start the old code from the new files.
   it('rebuilds the Harness image, so a newer package takes effect', async () => {

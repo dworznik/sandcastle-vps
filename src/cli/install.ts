@@ -1,8 +1,9 @@
 import { createReadStream } from 'node:fs'
+import { accessUp } from './access.js'
 import type { Connector } from './connectors/types.js'
 import { ensureNetworkScript, PLATFORM_NETWORK } from './network.js'
 import { packSelf, packageVersion } from './package.js'
-import { seededToggles } from './posture.js'
+import { readToggles, seededToggles } from './posture.js'
 import { describeTarget, type TargetProfile } from './profiles.js'
 import { parseProbe } from './preflight.js'
 import { shellQuote } from './shell.js'
@@ -264,6 +265,10 @@ export const provision = async (
     composeScript(profile.installDir, 'up -d --build --remove-orphans'),
   )
   if (up.code !== 0) throw fail('docker compose up', up.code, up.stderr)
+
+  // The Access service is built from the package too, so an upgrade rebuilds
+  // it where the toggle is on. Its server key is in a volume and survives.
+  if (readToggles(content).access) await accessUp(connector, profile.installDir, content, log)
 
   const port = harnessPort(content)
   log('\nChecking it from here…')
