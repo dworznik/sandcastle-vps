@@ -267,12 +267,14 @@ export const provision = async (
   )
   if (up.code !== 0) throw fail('docker compose up', up.code, up.stderr)
 
-  // The Access service is built from the package too, so an upgrade rebuilds
-  // it where the toggle is on. Its server key is in a volume and survives.
-  if (readToggles(content).access) await accessUp(connector, profile.installDir, content, log)
-  // And the Memory service, which travels with sessions (ADR 0010). Its
+  // The Memory service travels with sessions (ADR 0010) and is built from
+  // the package too, so an upgrade rebuilds it where the toggle is on. Its
   // store is in a volume or the operator's own directory, and survives.
   if (readToggles(content).sessions) await memoryUp(connector, profile.installDir, content, log)
+  // Then the Access service, after Memory: its rules resolve the Memory UI's
+  // proxy by name when it starts, so the proxy has to be there first. Its
+  // server key is in a volume and survives.
+  if (readToggles(content).access) await accessUp(connector, profile.installDir, content, log)
 
   const port = harnessPort(content)
   log('\nChecking it from here…')

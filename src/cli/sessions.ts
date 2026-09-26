@@ -1,3 +1,4 @@
+import { accessRefresh } from './access.js'
 import type { Connector } from './connectors/types.js'
 import { fail, harnessPort, readEnvScript } from './install.js'
 import { MEMORY_SERVICE, memoryDown, memoryUp } from './memory.js'
@@ -43,11 +44,19 @@ export const applySessions = async (
   enabled: boolean,
   log: Log = console.log,
 ): Promise<void> => {
+  // The hook runs after the toggle is written, so the environment file this
+  // reads already says what sessions is — and whether access is on, which
+  // decides whether the Memory UI's allowlist entry has to follow (#94).
+  const env = await connector.exec(readEnvScript(profile.installDir))
+  if (env.code !== 0) throw fail('Reading the Target', env.code, env.stderr)
+
   if (!enabled) {
     await memoryDown(connector, profile.installDir)
     log(`\nThe Memory service is stopped; its store is kept.`)
     log(`The login volume ${CLAUDE_VOLUME} is kept, so a login survives sessions being off.`)
     log('Running Sessions keep running; stop them from the Sessions menu.')
+    // After Memory is down: the UI leaves the allowlist with the toggle.
+    await accessRefresh(connector, profile.installDir, env.stdout, log)
     return
   }
   const created = await connector.exec(ensureClaudeVolumeScript())
@@ -55,15 +64,14 @@ export const applySessions = async (
     throw fail(`Creating the ${CLAUDE_VOLUME} volume`, created.code, created.stderr)
   }
   log(`\nThe shared login volume ${CLAUDE_VOLUME} is there, for every Session on ${profile.name}.`)
-  // The hook runs after the toggle is written, so the environment file this
-  // reads already says sessions is on.
-  const env = await connector.exec(readEnvScript(profile.installDir))
-  if (env.code !== 0) throw fail('Reading the Target', env.code, env.stderr)
   await memoryUp(connector, profile.installDir, env.stdout, log)
   log(
     `The Memory service is up as \`${MEMORY_SERVICE}\` on the platform network; it waits for the` +
       '\nplugin below to be installed, and says so in its log until it is.',
   )
+  // After Memory is up, so the proxy resolves on the platform network when
+  // the Access entrypoint builds its rules.
+  await accessRefresh(connector, profile.installDir, env.stdout, log)
   log(`\n${FIRST_TIME}`)
 }
 

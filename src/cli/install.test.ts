@@ -376,6 +376,32 @@ describe('provision', () => {
     ).toContain('--build')
   })
 
+  // The Access rules resolve the Memory UI's proxy by name at start (#94), so
+  // on a Target with both toggles on the proxy has to exist before Access
+  // starts, and Access has to start afresh to see it.
+  it('brings Memory up before Access on a Target with both on, and starts Access afresh', async () => {
+    const both = writeToggle(
+      writeToggle(upsertAllEnv('', desiredEnv(profile, facts), 'seed'), 'sessions', true),
+      'access',
+      true,
+    )
+    const { connector, calls } = fakeTarget(both)
+    await provision({ profile, connector }, silent, quick)
+    const scripts = calls.map((call) => call.script)
+    const memory = scripts.findIndex(
+      (script) => script.includes('/memory') && script.includes('up -d'),
+    )
+    const access = scripts.findIndex(
+      (script) => script.includes('/access') && script.includes('up -d'),
+    )
+    expect(memory).toBeGreaterThanOrEqual(0)
+    expect(access).toBeGreaterThan(memory)
+    expect(scripts[access]).toContain('--force-recreate')
+    expect(calls.find((call) => call.script.includes('access/allowlist'))?.stdin).toContain(
+      'memory-ui:37777',
+    )
+  })
+
   it('leaves Memory alone on a Run-only Target', async () => {
     const { connector, calls } = fakeTarget()
     await provision({ profile, connector }, silent, quick)

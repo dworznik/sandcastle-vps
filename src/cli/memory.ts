@@ -1,3 +1,4 @@
+import { MEMORY_UI } from './access.js'
 import type { Connector } from './connectors/types.js'
 import { fail } from './exec.js'
 import { MEMORY_PORT, MEMORY_SERVICE } from './memory-address.js'
@@ -135,6 +136,24 @@ ${store}
       # uv's cache: Chroma is fetched into it on first start, and a restart
       # should not fetch it again.
       - memory_cache:/home/agent/.cache
+    restart: unless-stopped
+
+  # The worker's UI, as Access exposes it (ADR 0011). The worker accepts only
+  # loopback origins and that cannot be configured, so over the VPN its
+  # viewer would load and every write would be refused; this proxy rewrites
+  # the Origin header to a loopback value and forwards to the worker, and it
+  # is what the allowlist names — never the worker itself. No port published:
+  # the Access service DNATs to it by name. TEMPORARY BY DECLARATION (ADR
+  # 0010): remove this service, docker/memory/proxy.*, and point MEMORY_UI in
+  # src/cli/access.ts at the worker, once an upstream claude-mem release adds
+  # a configurable origin list.
+  ${MEMORY_UI.service}:
+    build:
+      context: ${yaml(`${installDir}/docker/memory`)}
+      dockerfile: proxy.Dockerfile
+    hostname: ${MEMORY_UI.service}
+    depends_on:
+      - ${MEMORY_SERVICE}
     restart: unless-stopped
 
 volumes:

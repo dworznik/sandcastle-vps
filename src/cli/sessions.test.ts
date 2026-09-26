@@ -777,15 +777,53 @@ describe('applySessions', () => {
     )
   })
 
+  // The Memory UI is an Exposed Service only while sessions is on (#94), and
+  // the Access service reads its allowlist at start: with access on, flipping
+  // sessions rewrites the allowlist and restarts Access, after Memory is up so
+  // the proxy resolves on the platform network.
+  it('rewrites the allowlist and restarts Access when access is on', async () => {
+    const { connector, ran } = fakeConnector({
+      env: ENV.replace('ACCESS_ENABLED=false', 'ACCESS_ENABLED=true'),
+    })
+    await applySessions({ profile, connector }, true, () => {})
+    const scripts = ran.map((call) => call.script)
+    const up = scripts.findIndex((script) => script.includes('/memory') && script.includes('up -d'))
+    const allowlist = ran.find((call) => call.script.includes('access/allowlist'))
+    expect(allowlist?.stdin).toContain('memory-ui:37777')
+    expect(scripts.indexOf(allowlist?.script ?? '')).toBeGreaterThan(up)
+    expect(scripts.findIndex((script) => script.includes('restart access'))).toBeGreaterThan(up)
+  })
+
+  it('takes the Memory UI out of the allowlist when sessions is disabled with access on', async () => {
+    const off = ENV.replace('SESSIONS_ENABLED=true', 'SESSIONS_ENABLED=false').replace(
+      'ACCESS_ENABLED=false',
+      'ACCESS_ENABLED=true',
+    )
+    const { connector, ran } = fakeConnector({ env: off })
+    await applySessions({ profile, connector }, false, () => {})
+    const allowlist = ran.find((call) => call.script.includes('access/allowlist'))
+    expect(allowlist?.stdin).toContain('inngest:8288')
+    expect(allowlist?.stdin).not.toContain('memory-ui')
+    expect(ran.some((call) => call.script.includes('restart access'))).toBe(true)
+  })
+
+  it('leaves Access alone when access is off', async () => {
+    const { ran } = await apply(true)
+    expect(ran.some((call) => call.script.includes('access/'))).toBe(false)
+  })
+
   // Disabling gates new Sessions and stops the worker; it neither stops
   // running Sessions nor forgets the login or the store, which would make
   // re-enabling a second first-time setup.
   it('stops Memory but keeps the volume, the store and the running Sessions when sessions is disabled', async () => {
     const { ran, shown } = await apply(false)
-    expect(ran).toHaveLength(1)
-    expect(ran[0]?.script).toContain('/memory')
-    expect(ran[0]?.script).toContain(' down')
-    expect(ran[0]?.script).not.toContain('down -v')
+    // One read of the Target's environment, to learn whether access is on;
+    // the one thing done is stopping Memory.
+    const acted = ran.filter((call) => !call.script.startsWith('cat '))
+    expect(acted).toHaveLength(1)
+    expect(acted[0]?.script).toContain('/memory')
+    expect(acted[0]?.script).toContain(' down')
+    expect(acted[0]?.script).not.toContain('down -v')
     expect(shown).toContain('is kept')
     expect(shown).toContain('keep running')
   })

@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   ACCESS_PROJECT,
   EXPOSED_SERVICES,
+  MEMORY_UI,
+  accessRefresh,
+  accessRestartScript,
+  exposedServices,
   TUNNEL_ADDRESS,
   TUNNEL_SUBNET,
   WIREGUARD_PORT,
@@ -38,6 +42,7 @@ import {
   type Peer,
 } from './access.js'
 import type { Connector, ExecOptions, ExecResult } from './connectors/types.js'
+import { MEMORY_PORT, MEMORY_SERVICE } from './memory.js'
 import { PLATFORM_NETWORK } from './network.js'
 
 const INSTALL_DIR = '/home/op/.sandcastle-vps'
@@ -92,9 +97,53 @@ describe('expose', () => {
     expect(() => expose([{ label: 'x', service: 'inngest', port: 70000 }])).toThrow(/Not a port/u)
   })
 
-  it('exposes nothing but the Orchestrator dashboard on day one', () => {
+  it('exposes nothing but the Orchestrator dashboard on a Run-only Target', () => {
     expect(EXPOSED_SERVICES.map((service) => `${service.service}:${service.port}`)).toEqual([
       'inngest:8288',
+    ])
+    expect(exposedServices('ACCESS_ENABLED=true\n')).toEqual(EXPOSED_SERVICES)
+  })
+
+  // The worker's origin check refuses writes from anywhere but loopback, so
+  // what is exposed is the proxy that rewrites the Origin header (ADR 0010),
+  // and never the worker: listing it would be a read-only UI at best.
+  it('refuses the Memory worker itself, on any port', () => {
+    expect(() => expose([{ label: 'x', service: MEMORY_SERVICE, port: MEMORY_PORT }])).toThrow(
+      /Memory worker .* never exposed/u,
+    )
+    expect(() => expose([{ label: 'x', service: MEMORY_SERVICE, port: 80 }])).toThrow()
+  })
+})
+
+describe('MEMORY_UI', () => {
+  it('is the proxy in front of the worker, on the worker’s port, and not the worker', () => {
+    expect(MEMORY_UI.service).not.toBe(MEMORY_SERVICE)
+    expect(MEMORY_UI.port).toBe(MEMORY_PORT)
+    expect(expose([MEMORY_UI])).toContain(`${MEMORY_UI.service}:${MEMORY_PORT}\n`)
+  })
+})
+
+describe('exposedServices', () => {
+  // The Memory UI follows the sessions toggle, not the access toggle: Memory
+  // comes up with sessions (ADR 0010), and an allowlist entry for a service
+  // that is not there would be a rule pointing at nothing.
+  it('adds the Memory UI when sessions is on, after the dashboard', () => {
+    expect(exposedServices('SESSIONS_ENABLED=true\nACCESS_ENABLED=true\n')).toEqual([
+      ...EXPOSED_SERVICES,
+      MEMORY_UI,
+    ])
+  })
+
+  it('lists the Memory UI by the proxy and never the worker, in the allowlist', () => {
+    const allowlist = expose(exposedServices('SESSIONS_ENABLED=true\n'))
+    expect(allowlist).toContain(`${MEMORY_UI.service}:${MEMORY_PORT}\n`)
+    expect(allowlist).not.toContain(`${MEMORY_SERVICE}:`)
+  })
+
+  it('drops the Memory UI when sessions is off', () => {
+    expect(exposedServices('SESSIONS_ENABLED=false\n')).toEqual(EXPOSED_SERVICES)
+    expect(exposedAt(exposedServices(''))).toEqual([
+      `Orchestrator dashboard: http://${TUNNEL_ADDRESS}:8288`,
     ])
   })
 })
@@ -474,6 +523,17 @@ describe('accessUp', () => {
     expect(up).toBeGreaterThan(peers)
   })
 
+  // The entrypoint resolves each Exposed Service when it starts, so a
+  // container compose left running would keep rules against addresses the
+  // Memory proxy no longer has.
+  it('starts the service afresh every time, so its rules match what is running', async () => {
+    const { connector, calls } = fakeConnector()
+    await accessUp(connector, INSTALL_DIR, ENABLED, () => {})
+    expect(calls.map((call) => call.script)).toContainEqual(
+      expect.stringContaining('up -d --build --force-recreate'),
+    )
+  })
+
   it('writes the ddclient config, mode 600, when DNS is configured and the token is held', async () => {
     const { connector, calls } = fakeConnector()
     await accessUp(connector, INSTALL_DIR, WITH_DNS, () => {})
@@ -483,6 +543,19 @@ describe('accessUp', () => {
     expect(conf?.script).not.toContain(CF_TOKEN)
     const compose = calls.find((call) => call.script.includes('access/compose.yaml'))
     expect(compose?.stdin).toContain('ddclient:')
+  })
+
+  it('writes the Memory UI into the allowlist when sessions is on, and not otherwise', async () => {
+    const both = fakeConnector()
+    await accessUp(both.connector, INSTALL_DIR, `${ENABLED}SESSIONS_ENABLED=true\n`, () => {})
+    const withSessions = both.calls.find((call) => call.script.includes('access/allowlist'))
+    expect(withSessions?.stdin).toContain(`${MEMORY_UI.service}:${MEMORY_PORT}`)
+    expect(withSessions?.stdin).not.toContain(`${MEMORY_SERVICE}:`)
+
+    const alone = fakeConnector()
+    await accessUp(alone.connector, INSTALL_DIR, ENABLED, () => {})
+    const without = alone.calls.find((call) => call.script.includes('access/allowlist'))
+    expect(without?.stdin).not.toContain(MEMORY_UI.service)
   })
 
   it('writes no ddclient config without a domain', async () => {
@@ -552,6 +625,40 @@ describe('gatherAccess', () => {
   })
 })
 
+// The allowlist follows the sessions toggle, and the Access service reads it
+// only at start: flipping sessions with access on has to rewrite the file and
+// restart the service, or the rules would not match what status says.
+describe('accessRefresh', () => {
+  it('rewrites the allowlist and restarts the service when access is on', async () => {
+    const { connector, calls } = fakeConnector()
+    await accessRefresh(connector, INSTALL_DIR, `${ENABLED}SESSIONS_ENABLED=true\n`, () => {})
+    const allowlist = calls.find((call) => call.script.includes('access/allowlist'))
+    expect(allowlist?.stdin).toContain(`${MEMORY_UI.service}:${MEMORY_PORT}`)
+    const scripts = calls.map((call) => call.script)
+    const restart = scripts.findIndex((script) => script.includes('restart access'))
+    expect(restart).toBeGreaterThan(scripts.indexOf(allowlist?.script ?? ''))
+  })
+
+  it('does nothing when access is off', async () => {
+    const { connector, calls } = fakeConnector()
+    await accessRefresh(connector, INSTALL_DIR, 'SESSIONS_ENABLED=true\n', () => {})
+    expect(calls).toEqual([])
+  })
+
+  it('tolerates a service that was never brought up, on restart', () => {
+    const script = accessRestartScript(INSTALL_DIR)
+    expect(script).toContain('[ -f compose.yaml ] || exit 0')
+    expect(script).toContain('docker compose restart access')
+  })
+
+  it('stops rather than restarting a service whose allowlist it could not write', async () => {
+    const { connector } = fakeConnector({ failing: 'access/allowlist' })
+    await expect(accessRefresh(connector, INSTALL_DIR, ENABLED, () => {})).rejects.toThrow(
+      /it broke/u,
+    )
+  })
+})
+
 describe('formatAccess', () => {
   const on: AccessStatus = {
     enabled: true,
@@ -560,7 +667,14 @@ describe('formatAccess', () => {
     peers: [phone],
     service: 'access\trunning',
     listening: [{ address: '0.0.0.0', port: 51820, loopback: false }],
+    exposed: EXPOSED_SERVICES,
   }
+
+  it('lists the Memory UI among the Exposed Services when it is exposed', () => {
+    const said = formatAccess({ ...on, exposed: [...EXPOSED_SERVICES, MEMORY_UI] }).join('\n')
+    expect(said).toContain(`Memory UI: http://${TUNNEL_ADDRESS}:${MEMORY_PORT}`)
+    expect(formatAccess(on).join('\n')).not.toContain('Memory UI')
+  })
 
   it('names the WireGuard UDP port as the one intended public listener', () => {
     const said = formatAccess(on).join('\n')
