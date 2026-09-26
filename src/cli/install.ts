@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs'
 import type { Connector } from './connectors/types.js'
+import { ensureNetworkScript, PLATFORM_NETWORK, retireDefaultNetworkScript } from './network.js'
 import { packSelf, packageVersion } from './package.js'
 import { describeTarget, type TargetProfile } from './profiles.js'
 import { parseProbe } from './preflight.js'
@@ -246,11 +247,22 @@ export const provision = async (
   await writeTargetEnv(connector, profile.installDir, content)
   log(`Wrote ${profile.installDir}/.env (mode 600) and ${secretsDir(profile.installDir)}.`)
 
+  // Before `up`: compose declares the network external and refuses to start
+  // the stack until it exists. A no-op on a Target that already has it.
+  const network = await connector.exec(ensureNetworkScript())
+  if (network.code !== 0) {
+    throw fail(`Creating the ${PLATFORM_NETWORK} network`, network.code, network.stderr)
+  }
+
   log('\nBuilding the Harness image and starting the stack…')
   const up = await connector.exec(
     composeScript(profile.installDir, 'up -d --build --remove-orphans'),
   )
   if (up.code !== 0) throw fail('docker compose up', up.code, up.stderr)
+  // A Target installed before the platform network existed: `up` has just
+  // moved its containers onto the new network, and this removes the one
+  // compose made and would otherwise leave behind. Nothing on a fresh Target.
+  await connector.exec(retireDefaultNetworkScript())
 
   const port = harnessPort(content)
   log('\nChecking it from here…')

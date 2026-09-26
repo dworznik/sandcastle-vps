@@ -43,7 +43,12 @@ interface TargetState {
   readonly projects?: unknown
   readonly images?: string
   readonly apps?: string
+  /** What `docker network inspect` printed for the platform network; empty
+   *  for a Target whose install predates it. */
+  readonly network?: string
 }
+
+const JOINED = 'sandcastle-vps\tbridge\tsandcastle-vps-harness-1\tsandcastle-vps-inngest-1\n'
 
 const fakeConnector = (state: TargetState = {}) => {
   const ran: string[] = []
@@ -70,6 +75,7 @@ const fakeConnector = (state: TargetState = {}) => {
       if (script.includes('/v0/gql')) return ok(state.apps ?? SYNCED)
       if (script.includes('/proc/net/tcp')) return ok(LOOPBACK_ONLY)
       if (script.includes('compose ps')) return ok('NAME      STATUS\nharness   Up 2 hours')
+      if (script.includes('docker network inspect')) return ok(state.network ?? JOINED)
       return ok('')
     },
     putTar: () => Promise.resolve(),
@@ -117,6 +123,8 @@ describe('gatherStatus', () => {
       '>>',
       'ssh-keygen',
       'git clone',
+      'network create',
+      'network rm',
       'build-image',
       '/dispatch',
     ]
@@ -137,6 +145,27 @@ describe('gatherStatus', () => {
     const { report } = await gather()
     expect(report.checks.map((check) => check.label)).toEqual(['Harness synced', 'loopback only'])
     expect(report.checks.every((check) => check.ok)).toBe(true)
+  })
+
+  it('reports the platform network and who has joined it', async () => {
+    const { report } = await gather()
+    expect(report.network).toEqual({
+      present: true,
+      driver: 'bridge',
+      attached: ['sandcastle-vps-harness-1', 'sandcastle-vps-inngest-1'],
+    })
+  })
+
+  // A Target installed before the platform network has a stack that works
+  // and a network that is not there; the next upgrade creates it, and the
+  // report has to say which of those two situations this is.
+  it('reports the platform network absent on an install that predates it', async () => {
+    const { report } = await gather({ network: '' })
+    expect(report.network).toEqual({ present: false, attached: [] })
+    const said = formatStatus(report)
+    expect(said).toContain('sandcastle-vps')
+    expect(said).toContain('not there')
+    expect(said).toContain('install/upgrade')
   })
 
   it('marks a Project whose image has not been built', async () => {
@@ -201,7 +230,15 @@ describe('formatStatus', () => {
     checks: [{ ok: true, label: 'Harness synced', detail: 'sandcastle-vps, 1 function' }],
     projects: [{ name: 'todo', imageName: 'sandcastle:todo', onboarded: true, imageBuilt: true }],
     missingCredentials: [],
+    network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
     ...overrides,
+  })
+
+  it('shows the network beside the containers, with who has joined it', () => {
+    const said = formatStatus(report())
+    expect(said).toContain('Network')
+    expect(said).toContain('sandcastle-vps')
+    expect(said).toContain('sandcastle-vps-harness-1')
   })
 
   // "But I fixed that" is usually a Target running something older than the

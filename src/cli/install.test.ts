@@ -287,6 +287,45 @@ describe('provision', () => {
     expect(checks.every((check) => check.ok)).toBe(true)
   })
 
+  // Compose declares the platform network external, so a stack brought up
+  // before the network exists is a stack that refuses to start.
+  it('creates the platform network before bringing the stack up', async () => {
+    const { connector, calls } = fakeTarget()
+    await provision({ profile, connector }, silent, quick)
+    const scripts = calls.map((call) => call.script)
+    const created = scripts.findIndex((script) => script.includes('docker network create'))
+    const up = scripts.findIndex((script) => script.includes('compose up'))
+    expect(created).toBeGreaterThanOrEqual(0)
+    expect(created).toBeLessThan(up)
+  })
+
+  it('stops rather than starting a stack whose network could not be made', async () => {
+    const { connector, calls } = fakeTarget('', {
+      'docker network create': {
+        code: 1,
+        stdout: '',
+        stderr: 'Cannot connect to the Docker daemon',
+      },
+    })
+    await expect(provision({ profile, connector }, silent, quick)).rejects.toThrow(
+      /Cannot connect to the Docker daemon/,
+    )
+    expect(calls.map((call) => call.script)).not.toContainEqual(
+      expect.stringContaining('compose up'),
+    )
+  })
+
+  // A Target installed before the platform network existed keeps the network
+  // compose made for it unless something removes it, and compose does not.
+  it('retires the network compose used to create, after the stack has moved off it', async () => {
+    const { connector, calls } = fakeTarget()
+    await provision({ profile, connector }, silent, quick)
+    const scripts = calls.map((call) => call.script)
+    const retired = scripts.findIndex((script) => script.includes('docker network rm'))
+    const up = scripts.findIndex((script) => script.includes('compose up'))
+    expect(retired).toBeGreaterThan(up)
+  })
+
   // The Harness image is built from the delivered package, so an upgrade that
   // did not rebuild would start the old code from the new files.
   it('rebuilds the Harness image, so a newer package takes effect', async () => {

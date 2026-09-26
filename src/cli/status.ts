@@ -1,6 +1,7 @@
 import type { Connector } from './connectors/types.js'
 import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js'
 import { composeScript, harnessPort, readEnvScript } from './install.js'
+import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
 import { parseProjects, projectsScript, type RemoteProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { parseProbe } from './preflight.js'
@@ -67,6 +68,9 @@ export interface StatusReport {
   /** Why the Projects could not be listed, when they could not. */
   readonly projectsError?: string
   readonly missingCredentials: readonly CredentialName[]
+  /** The platform network, absent on a Target installed before it existed
+   *  and not upgraded since. */
+  readonly network: PlatformNetwork
 }
 
 export interface StatusSession {
@@ -112,16 +116,18 @@ export const gatherStatus = async ({
       checks: [],
       projects: [],
       missingCredentials: [],
+      network: { present: false, attached: [] },
     }
   }
 
   const port = harnessPort(envContent)
-  const [ps, apps, listeners, projects, images] = await Promise.all([
+  const [ps, apps, listeners, projects, images, network] = await Promise.all([
     connector.exec(composeScript(profile.installDir, 'ps')),
     connector.exec(appsQueryScript(profile.installDir)),
     connector.exec(LISTENERS_SCRIPT),
     connector.exec(projectsScript(profile.installDir, port)),
     connector.exec(imagesScript()),
+    connector.exec(networkScript()),
   ])
 
   const built = new Set(
@@ -155,6 +161,7 @@ export const gatherStatus = async ({
     projects: listed,
     projectsError,
     missingCredentials: missing(envContent),
+    network: parseNetwork(network.stdout),
   }
 }
 
@@ -229,6 +236,24 @@ export const formatStatus = (report: StatusReport): string => {
   }
 
   lines.push('', 'Containers', report.containers || '  (none)')
+
+  // Beside the containers because it is what joins them: the stack, and later
+  // every Session and the Memory service, meet on it by name (ADR 0010).
+  lines.push('', 'Network')
+  if (!report.network.present) {
+    lines.push(
+      `  ${PLATFORM_NETWORK.padEnd(24)}not there — this install predates the platform network;`,
+      '                          run install/upgrade to create it and move the stack onto it',
+    )
+  } else {
+    const joined =
+      report.network.attached.length === 0
+        ? 'nothing attached'
+        : `joined by ${report.network.attached.join(', ')}`
+    lines.push(
+      `  ${PLATFORM_NETWORK.padEnd(24)}${report.network.driver ?? 'unknown driver'}, ${joined}`,
+    )
+  }
   return lines.join('\n')
 }
 
