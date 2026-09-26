@@ -10,7 +10,15 @@ import {
   accessPort,
   accessStateScript,
   accessUp,
+  ddclientConf,
+  defaultDnsNames,
+  dnsRecordScript,
   endpointFrom,
+  exposedAt,
+  parseDnsRecord,
+  peerEndpoint,
+  readDns,
+  validateDnsName,
   ensurePeersFileScript,
   expose,
   formatAccess,
@@ -25,6 +33,7 @@ import {
   validateKey,
   validatePeerName,
   writeAccessFileScript,
+  type AccessDns,
   type AccessStatus,
   type Peer,
 } from './access.js'
@@ -46,6 +55,16 @@ const laptop: Peer = {
   address: '10.13.13.3',
   added: '2026-09-26',
 }
+
+const dns: AccessDns = {
+  zone: 'example.com',
+  publicName: 'vps.example.com',
+  internalName: 'vps.in.example.com',
+}
+// Token-shaped enough to be handled like one, low-entropy enough that the
+// secret scanner does not read a fixture as a leak.
+const CF_TOKEN = 'cf-token-fixture-not-real'
+const WITH_DNS = `ACCESS_ENABLED=true\nACCESS_ENDPOINT=203.0.113.7\nACCESS_DNS_ZONE=example.com\nACCESS_PUBLIC_NAME=vps.example.com\nACCESS_INTERNAL_NAME=vps.in.example.com\nCLOUDFLARE_API_TOKEN=${CF_TOKEN}\n`
 
 describe('expose', () => {
   it('writes one service:port per Exposed Service', () => {
@@ -111,6 +130,96 @@ describe('accessCompose', () => {
 
   it('quotes an install directory an operator could have chosen', () => {
     expect(accessCompose("/home/o'brien/x", 51820)).toContain(`"/home/o'brien/x/docker/access"`)
+  })
+})
+
+describe('accessCompose with DNS', () => {
+  it('adds the ddclient service, reading the config the CLI writes, only with a domain', () => {
+    const withDns = accessCompose(INSTALL_DIR, WIREGUARD_PORT, dns)
+    expect(withDns).toContain('ddclient:')
+    expect(withDns).toContain('dockerfile: ddclient.Dockerfile')
+    expect(withDns).toContain(`${INSTALL_DIR}/access/ddclient.conf:/config/ddclient.conf:ro`)
+    expect(accessCompose(INSTALL_DIR, WIREGUARD_PORT)).not.toContain('ddclient')
+  })
+})
+
+describe('readDns', () => {
+  it('reads the three names, and nothing when any is missing', () => {
+    expect(readDns(WITH_DNS)).toEqual(dns)
+    expect(readDns('ACCESS_DNS_ZONE=example.com\n')).toBeUndefined()
+    expect(readDns('')).toBeUndefined()
+  })
+})
+
+describe('defaultDnsNames', () => {
+  it('names the Target under the zone, and the tunnel address under in.', () => {
+    expect(defaultDnsNames('vps', 'example.com')).toEqual({
+      publicName: 'vps.example.com',
+      internalName: 'vps.in.example.com',
+    })
+  })
+})
+
+describe('validateDnsName', () => {
+  it('accepts a hostname and refuses anything that is not one', () => {
+    expect(validateDnsName('vps.in.example.com')).toBe('vps.in.example.com')
+    expect(validateDnsName(' VPS.Example.com ')).toBe('vps.example.com')
+    expect(() => validateDnsName('vps')).toThrow(/Not a DNS name/u)
+    expect(() => validateDnsName('a b.example.com')).toThrow(/Not a DNS name/u)
+    expect(() => validateDnsName('x;.example.com')).toThrow(/Not a DNS name/u)
+  })
+})
+
+describe('ddclientConf', () => {
+  it('keeps the public record current through the Cloudflare API, with the token in the file', () => {
+    const conf = ddclientConf(dns, CF_TOKEN)
+    expect(conf).toContain('protocol=cloudflare')
+    expect(conf).toContain('zone=example.com')
+    expect(conf).toContain('login=token')
+    expect(conf).toContain(`password=${CF_TOKEN}`)
+    expect(conf).toMatch(/\nvps\.example\.com\n$/u)
+    // ddclient 3.11 retired `use=web`/`web-skip`; these are the current names.
+    expect(conf).toContain('usev4=webv4')
+    expect(conf).toContain("webv4=https://cloudflare.com/cdn-cgi/trace, webv4-skip='ip='")
+  })
+})
+
+describe('dnsRecordScript', () => {
+  // The token is on stdin. The names are not secrets, so they may be
+  // arguments — quoted, because they came from the operator.
+  it('runs the record writer inside the Access container with the token on stdin only', () => {
+    const script = dnsRecordScript(INSTALL_DIR, dns.zone, dns.internalName, TUNNEL_ADDRESS)
+    expect(script).toContain('exec -T access /dns-record.sh')
+    expect(script).toContain("'example.com' 'vps.in.example.com' '10.13.13.1'")
+    expect(script).not.toContain(CF_TOKEN)
+  })
+
+  it('refuses a name that is not one, before it reaches the API', () => {
+    expect(() => dnsRecordScript(INSTALL_DIR, dns.zone, 'nope', 'auto')).toThrow(/Not a DNS name/u)
+  })
+
+  it('reads what the writer reported', () => {
+    expect(parseDnsRecord('record\tvps.example.com\tcreated\t203.0.113.7\n')).toEqual({
+      name: 'vps.example.com',
+      action: 'created',
+      content: '203.0.113.7',
+    })
+    expect(() => parseDnsRecord('')).toThrow(/did not report/u)
+  })
+})
+
+describe('peerEndpoint and exposedAt with DNS', () => {
+  it('names the Target by its public name once DNS is configured, and by address before', () => {
+    expect(peerEndpoint(WITH_DNS)).toBe('vps.example.com')
+    expect(peerEndpoint('ACCESS_ENDPOINT=203.0.113.7\n')).toBe('203.0.113.7')
+    expect(peerEndpoint('')).toBeUndefined()
+  })
+
+  it('prints Exposed Services by internal name and port, and by address without DNS', () => {
+    expect(exposedAt(EXPOSED_SERVICES, dns)).toEqual([
+      'Orchestrator dashboard: http://vps.in.example.com:8288',
+    ])
+    expect(exposedAt()).toEqual([`Orchestrator dashboard: http://${TUNNEL_ADDRESS}:8288`])
   })
 })
 
@@ -365,6 +474,23 @@ describe('accessUp', () => {
     expect(up).toBeGreaterThan(peers)
   })
 
+  it('writes the ddclient config, mode 600, when DNS is configured and the token is held', async () => {
+    const { connector, calls } = fakeConnector()
+    await accessUp(connector, INSTALL_DIR, WITH_DNS, () => {})
+    const conf = calls.find((call) => call.script.includes('access/ddclient.conf'))
+    expect(conf?.stdin).toContain(`password=${CF_TOKEN}`)
+    expect(conf?.script).toContain('chmod 600')
+    expect(conf?.script).not.toContain(CF_TOKEN)
+    const compose = calls.find((call) => call.script.includes('access/compose.yaml'))
+    expect(compose?.stdin).toContain('ddclient:')
+  })
+
+  it('writes no ddclient config without a domain', async () => {
+    const { connector, calls } = fakeConnector()
+    await accessUp(connector, INSTALL_DIR, ENABLED, () => {})
+    expect(calls.some((call) => call.script.includes('ddclient.conf'))).toBe(false)
+  })
+
   it('never touches the environment file or the stack', async () => {
     const { connector, calls } = fakeConnector()
     await accessUp(connector, INSTALL_DIR, ENABLED, () => {})
@@ -400,6 +526,12 @@ describe('gatherAccess', () => {
       expect(script).not.toContain('down')
       expect(script).not.toContain('restart')
     }
+  })
+
+  it('reads the DNS names when they are configured', async () => {
+    const { connector } = fakeConnector()
+    const status = await gatherAccess(connector, INSTALL_DIR, WITH_DNS)
+    expect(status.dns).toEqual(dns)
   })
 
   it('reads a fresh Target as access off with nothing listening', async () => {
@@ -442,6 +574,19 @@ describe('formatAccess', () => {
     expect(said).toContain('phone')
     expect(said).toContain('10.13.13.2')
     expect(said).toContain(`http://${TUNNEL_ADDRESS}:8288`)
+  })
+
+  it('says DNS is not configured, and where Peers reach the Target instead', () => {
+    const said = formatAccess(on).join('\n')
+    expect(said).toContain('dns')
+    expect(said).toContain('not configured')
+  })
+
+  it('names the records and the Exposed Services by name once DNS is configured', () => {
+    const said = formatAccess({ ...on, dns }).join('\n')
+    expect(said).toContain('vps.example.com:51820')
+    expect(said).toContain(`vps.in.example.com → ${TUNNEL_ADDRESS}`)
+    expect(said).toContain('http://vps.in.example.com:8288')
   })
 
   it('says when access is on but nothing is listening', () => {

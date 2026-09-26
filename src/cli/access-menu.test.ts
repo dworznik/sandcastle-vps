@@ -6,6 +6,7 @@ import {
   keypairScript,
   parseKeypair,
   revokePeer,
+  setupDns,
 } from './access-menu.js'
 import { parsePeers, renderPeer, type Peer } from './access.js'
 import type { Connector, ExecOptions, ExecResult } from './connectors/types.js'
@@ -48,6 +49,8 @@ interface TargetState {
 }
 
 const ON = 'ACCESS_ENABLED=true\nACCESS_ENDPOINT=vps.example.com\n'
+const CF_TOKEN = 'cf-token-fixture-not-real'
+const DNS = `ACCESS_ENABLED=true\nACCESS_ENDPOINT=203.0.113.7\nACCESS_DNS_ZONE=example.com\nACCESS_PUBLIC_NAME=vps.example.com\nACCESS_INTERNAL_NAME=vps.in.example.com\nCLOUDFLARE_API_TOKEN=${CF_TOKEN}\n`
 
 const fakeConnector = ({ env = ON, peers = '', failing }: TargetState = {}) => {
   const calls: Call[] = []
@@ -63,6 +66,12 @@ const fakeConnector = ({ env = ON, peers = '', failing }: TargetState = {}) => {
       if (script.includes('/.env') && script.startsWith('cat ')) return ok(env)
       if (script.includes('peers.conf') && script.startsWith('cat ')) return ok(peers)
       if (script.includes('wg genkey')) return ok(KEYPAIR)
+      if (script.includes('/dns-record.sh')) {
+        const name = /'([a-z.]+)' '([^']+)'$/u.exec(script)
+        return ok(
+          `record\t${name?.[1] ?? '?'}\tcreated\t${name?.[2] === 'auto' ? '203.0.113.7' : name?.[2]}\n`,
+        )
+      }
       if (script.includes('qrencode')) return ok('▄▄▄ a qr code ▄▄▄\n')
       return ok('')
     },
@@ -80,6 +89,9 @@ interface Answers {
   readonly revoke?: string
   /** What to pick from the Access menu, by value. */
   readonly action?: string | null
+  readonly zone?: string
+  readonly token?: string
+  readonly replaceToken?: boolean
 }
 
 const fakePrompter = ({
@@ -88,6 +100,9 @@ const fakePrompter = ({
   endpoint,
   revoke = 'laptop',
   action = null,
+  zone = 'example.com',
+  token = CF_TOKEN,
+  replaceToken = false,
 }: Answers = {}) => {
   const asked: string[] = []
   const prompter: Prompter = {
@@ -96,9 +111,13 @@ const fakePrompter = ({
       if (question.startsWith('A name')) return Promise.resolve(name)
       if (question.startsWith('The address')) return Promise.resolve(endpoint ?? fallback ?? '')
       if (question.startsWith('Which Peer')) return Promise.resolve(revoke)
+      if (question.startsWith('The zone')) return Promise.resolve(zone)
       return Promise.resolve(fallback ?? 'typed')
     },
-    secret: () => Promise.reject(new Error('nothing here is secret to ask for')),
+    secret: (question) => {
+      asked.push(question)
+      return Promise.resolve(token)
+    },
     select: <T>(question: string, choices: readonly Choice<T>[]) => {
       asked.push(question)
       if (question === 'Access') {
@@ -107,7 +126,10 @@ const fakePrompter = ({
       return Promise.resolve(choices[how === 'qr' ? 0 : 1]?.value as T)
     },
     multi: () => Promise.resolve([]),
-    confirm: () => Promise.resolve(true),
+    confirm: (question) => {
+      asked.push(question)
+      return Promise.resolve(question.includes('Replace') ? replaceToken : true)
+    },
     suspended: (work) => work(),
     close: () => {},
   }
@@ -362,5 +384,83 @@ describe('accessMenu', () => {
     const { prompter } = fakePrompter({ action: 'revoke', revoke: 'laptop' })
     await accessMenu({ profile, connector, prompter }, () => {})
     expect(calls.some((call) => call.script.includes(`wg set wg0 peer ${OTHER} remove`))).toBe(true)
+  })
+})
+
+const dns = async (target: TargetState = {}, answers: Answers = {}) => {
+  const { connector, calls } = fakeConnector(target)
+  const { prompter, asked } = fakePrompter(answers)
+  const lines: string[] = []
+  const result = await setupDns({ profile, connector, prompter }, (line) => lines.push(line))
+  const env = calls.find((call) => call.script.includes('/.env') && call.stdin !== undefined)
+  return { result, calls, asked, shown: lines.join('\n'), env: env?.stdin }
+}
+
+describe('setupDns', () => {
+  it('captures the zone, the two names and the token into the Target’s Local Config', async () => {
+    const { result, env, asked } = await dns()
+    expect(result).toEqual({
+      zone: 'example.com',
+      publicName: 'vps.example.com',
+      internalName: 'vps.in.example.com',
+    })
+    expect(readEnv(env ?? '', 'ACCESS_DNS_ZONE')).toBe('example.com')
+    expect(readEnv(env ?? '', 'ACCESS_PUBLIC_NAME')).toBe('vps.example.com')
+    expect(readEnv(env ?? '', 'ACCESS_INTERNAL_NAME')).toBe('vps.in.example.com')
+    expect(readEnv(env ?? '', 'CLOUDFLARE_API_TOKEN')).toBe(CF_TOKEN)
+    expect(asked.some((question) => question.startsWith('Cloudflare API token'))).toBe(true)
+  })
+
+  // The criterion: the token travels over stdin like the other credentials,
+  // and never appears on a command line or in a script on either end.
+  it('never puts the token in a script', async () => {
+    const { calls } = await dns()
+    for (const { script } of calls) expect(script).not.toContain(CF_TOKEN)
+    const records = calls.filter((call) => call.script.includes('/dns-record.sh'))
+    expect(records).toHaveLength(2)
+    for (const record of records) expect(record.stdin).toBe(CF_TOKEN)
+  })
+
+  it('writes the public record at the Target’s address and the internal one at the tunnel address', async () => {
+    const { calls, shown } = await dns()
+    const scripts = calls.map((call) => call.script).filter((s) => s.includes('/dns-record.sh'))
+    expect(scripts[0]).toContain("'vps.example.com' 'auto'")
+    expect(scripts[1]).toContain("'vps.in.example.com' '10.13.13.1'")
+    expect(shown).toContain('vps.example.com')
+    expect(shown).toContain('http://vps.in.example.com:8288')
+  })
+
+  it('brings the service up to date before writing records, so ddclient runs', async () => {
+    const { calls } = await dns()
+    const scripts = calls.map((call) => call.script)
+    const up = scripts.findIndex((script) => script.includes('compose up -d --build'))
+    const record = scripts.findIndex((script) => script.includes('/dns-record.sh'))
+    expect(up).toBeGreaterThanOrEqual(0)
+    expect(record).toBeGreaterThan(up)
+    expect(calls.some((call) => call.script.includes('ddclient.conf'))).toBe(true)
+  })
+
+  it('keeps a token already held unless asked to replace it', async () => {
+    const { asked, env } = await dns({ env: DNS })
+    expect(asked.some((question) => question.startsWith('Cloudflare API token'))).toBe(false)
+    expect(readEnv(env ?? '', 'CLOUDFLARE_API_TOKEN')).toBe(CF_TOKEN)
+    const replaced = await dns({ env: DNS }, { replaceToken: true, token: 'cf-token-fixture-two' })
+    expect(readEnv(replaced.env ?? '', 'CLOUDFLARE_API_TOKEN')).toBe('cf-token-fixture-two')
+  })
+
+  it('refuses when access is off', async () => {
+    const { result, shown, env } = await dns({ env: 'ACCESS_ENABLED=false\n' })
+    expect(result).toBeUndefined()
+    expect(shown).toContain('Access is off')
+    expect(env).toBeUndefined()
+  })
+})
+
+describe('addPeer with DNS', () => {
+  it('gives a Peer added afterwards the public name as its endpoint', async () => {
+    const { calls, shown } = await run({ env: DNS }, { how: 'qr' })
+    const qr = calls.find((call) => call.script.includes('qrencode'))
+    expect(qr?.stdin).toContain('Endpoint = vps.example.com:51820')
+    expect(shown).toContain('http://vps.in.example.com:8288')
   })
 })

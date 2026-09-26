@@ -40,6 +40,13 @@ const TUNNEL_PREFIX = '10.13.13.'
 /** The keys in the Target's Local Config that Access reads. */
 export const ENDPOINT_KEY = 'ACCESS_ENDPOINT'
 export const PORT_KEY = 'ACCESS_PORT'
+/** The optional DNS layer (ADR 0011): a zone on Cloudflare, the public name
+ *  Peers dial, the internal name at the tunnel address, and the API token
+ *  that writes both — a credential, held like the others. */
+export const DNS_ZONE_KEY = 'ACCESS_DNS_ZONE'
+export const PUBLIC_NAME_KEY = 'ACCESS_PUBLIC_NAME'
+export const INTERNAL_NAME_KEY = 'ACCESS_INTERNAL_NAME'
+export const CLOUDFLARE_TOKEN_KEY = 'CLOUDFLARE_API_TOKEN'
 
 export const accessDir = (installDir: string): string => `${installDir}/access`
 
@@ -100,9 +107,124 @@ export const expose = (services: readonly ExposedService[]): string => {
   ].join('\n')}\n`
 }
 
-/** Where a Peer reaches each Exposed Service, for the operator to read. */
-export const exposedAt = (services: readonly ExposedService[] = EXPOSED_SERVICES): string[] =>
-  services.map(({ label, port }) => `${label}: http://${TUNNEL_ADDRESS}:${port}`)
+/** Where a Peer reaches each Exposed Service, for the operator to read: by
+ *  the internal name once DNS is configured, by the tunnel address before. */
+export const exposedAt = (
+  services: readonly ExposedService[] = EXPOSED_SERVICES,
+  dns?: AccessDns,
+): string[] =>
+  services.map(
+    ({ label, port }) => `${label}: http://${dns?.internalName ?? TUNNEL_ADDRESS}:${port}`,
+  )
+
+// ----------------------------------------------------------------------- dns
+
+/** The optional DNS layer, as recorded on the Target. All three or nothing:
+ *  a zone without names, or names without a zone, is a half-configured layer
+ *  that would print addresses nothing resolves. */
+export interface AccessDns {
+  readonly zone: string
+  /** The Target's public address by name — what a Peer's config dials. */
+  readonly publicName: string
+  /** The tunnel address by name — what an Exposed Service is reached at. */
+  readonly internalName: string
+}
+
+export const readDns = (envContent: string): AccessDns | undefined => {
+  const zone = readEnv(envContent, DNS_ZONE_KEY)
+  const publicName = readEnv(envContent, PUBLIC_NAME_KEY)
+  const internalName = readEnv(envContent, INTERNAL_NAME_KEY)
+  return zone && publicName && internalName ? { zone, publicName, internalName } : undefined
+}
+
+/** `<target>.<zone>` for the public endpoint and `<target>.in.<zone>` for the
+ *  tunnel address — claude-tmux's `agent.in.…` shape, with the Target's name
+ *  in place of a fixed word. Defaults; the operator may name them. */
+export const defaultDnsNames = (
+  target: string,
+  zone: string,
+): Pick<AccessDns, 'publicName' | 'internalName'> => ({
+  publicName: `${target}.${zone}`,
+  internalName: `${target}.in.${zone}`,
+})
+
+const DNS_LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+const DNS_NAME = new RegExp(`^${DNS_LABEL}(?:\\.${DNS_LABEL})+$`, 'u')
+
+/** A hostname of at least two labels, lowercased — it goes into a record, a
+ *  Peer config, a ddclient config and, quoted, a command line. */
+export const validateDnsName = (name: string): string => {
+  const trimmed = name.trim().toLowerCase()
+  if (!DNS_NAME.test(trimmed)) {
+    throw new Error(`Not a DNS name: "${name.trim()}". Give a hostname such as vps.example.com.`)
+  }
+  return trimmed
+}
+
+/**
+ * ddclient's config, holding the token: written by the CLI at mode 600 and
+ * mounted read-only, never templated from an environment the whole compose
+ * project would see. It learns the public address from Cloudflare itself,
+ * the one party already in the picture, and updates the one public record.
+ */
+export const ddclientConf = ({ zone, publicName }: AccessDns, token: string): string =>
+  [
+    '# Written by the creator CLI (ADR 0011). Keeps the public endpoint record',
+    "# current with this Target's public address. Overwritten when DNS is set up",
+    '# again; the token here is the same one recorded in the environment file.',
+    'daemon=300',
+    'syslog=no',
+    'ssl=yes',
+    "usev4=webv4, webv4=https://cloudflare.com/cdn-cgi/trace, webv4-skip='ip='",
+    'protocol=cloudflare',
+    `zone=${zone}`,
+    'login=token',
+    `password=${token}`,
+    publicName,
+    '',
+  ].join('\n')
+
+/** The record writer, inside the Access container, with the token on stdin.
+ *  `content` is an address or `auto` for the Target's own public address. */
+export const dnsRecordScript = (
+  installDir: string,
+  zone: string,
+  name: string,
+  content: string,
+): string =>
+  accessComposeScript(
+    installDir,
+    `exec -T access /dns-record.sh ${shellQuote(validateDnsName(zone))} ${shellQuote(validateDnsName(name))} ${shellQuote(content)}`,
+  )
+
+export interface DnsRecord {
+  readonly name: string
+  readonly action: 'created' | 'updated'
+  readonly content: string
+}
+
+export const parseDnsRecord = (stdout: string): DnsRecord => {
+  const line = stdout
+    .trim()
+    .split('\n')
+    .find((candidate) => candidate.startsWith('record\t'))
+  const [, name, action, content] = line?.split('\t') ?? []
+  if (!name || (action !== 'created' && action !== 'updated') || !content) {
+    throw new Error(`The record writer did not report a record. It answered:\n${stdout.trim()}`)
+  }
+  return { name, action, content }
+}
+
+/** The Exposed Services as the operator reaches them from this Target's
+ *  Local Config: by name once DNS is configured, by address before. */
+export const exposedFor = (envContent: string): string[] =>
+  exposedAt(EXPOSED_SERVICES, readDns(envContent))
+
+/** What a Peer's config dials: the public name once DNS is configured, the
+ *  recorded address before. A Peer added before DNS keeps its address and
+ *  keeps working; ddclient tracks the same address under the name. */
+export const peerEndpoint = (envContent: string): string | undefined =>
+  readDns(envContent)?.publicName ?? readEnv(envContent, ENDPOINT_KEY)
 
 // ------------------------------------------------------------ compose project
 
@@ -120,8 +242,22 @@ const yaml = (value: string): string => JSON.stringify(value)
  * upgrade: `down` keeps it, and only a `down -v` the CLI never runs would
  * remove it.
  */
-export const accessCompose = (installDir: string, port: number): string => {
+export const accessCompose = (installDir: string, port: number, dns?: AccessDns): string => {
   const dir = accessDir(installDir)
+  // Only with a domain: without one there is no record to keep current, and
+  // a ddclient with nothing to do would still be a container to explain.
+  const ddclient = dns
+    ? `
+  ddclient:
+    build:
+      context: ${yaml(`${installDir}/docker/access`)}
+      dockerfile: ddclient.Dockerfile
+    volumes:
+      # The config holds the token: written by the CLI, mode 600, read-only.
+      - ${yaml(`${dir}/ddclient.conf:/config/ddclient.conf:ro`)}
+    restart: unless-stopped
+`
+    : ''
   return `# The Access service (ADR 0011). Generated by the creator CLI when access is
 # enabled or the Target is upgraded; do not edit, it is written over.
 name: ${ACCESS_PROJECT}
@@ -147,7 +283,7 @@ services:
       - ${yaml(`${dir}/peers.conf:/config/peers.conf:ro`)}
       - ${yaml(`${dir}/allowlist:/config/allowlist:ro`)}
     restart: unless-stopped
-
+${ddclient}
 volumes:
   access_keys:
 
@@ -378,9 +514,14 @@ export const accessUp = async (
   log: (line: string) => void,
 ): Promise<void> => {
   const port = accessPort(envContent)
+  const dns = readDns(envContent)
+  const token = readEnv(envContent, CLOUDFLARE_TOKEN_KEY)
   const files: [string, string][] = [
-    ['compose.yaml', accessCompose(installDir, port)],
+    ['compose.yaml', accessCompose(installDir, port, dns)],
     ['allowlist', expose(EXPOSED_SERVICES)],
+    // The token is in this file, which is why it goes over stdin to a mode
+    // 600 file like the environment file, and why compose is not handed it.
+    ...(dns && token ? [['ddclient.conf', ddclientConf(dns, token)] as [string, string]] : []),
   ]
   for (const [file, content] of files) {
     const written = await connector.exec(writeAccessFileScript(installDir, file), {
@@ -417,6 +558,8 @@ export const accessDown = async (connector: Connector, installDir: string): Prom
 export interface AccessStatus {
   readonly enabled: boolean
   readonly endpoint?: string
+  /** The optional DNS layer, when configured. */
+  readonly dns?: AccessDns
   readonly port: number
   readonly peers: readonly Peer[]
   /** Why the Peers could not be read, when they could not. */
@@ -459,6 +602,7 @@ export const gatherAccess = async (
   return {
     enabled,
     endpoint,
+    dns: readDns(envContent),
     port,
     peers,
     peersError,
@@ -477,10 +621,16 @@ export const formatAccess = (status: AccessStatus): string[] => {
   }
   const lines: string[] = []
   const running = /\brunning\b/u.test(status.service)
+  const dialled = status.dns?.publicName ?? status.endpoint ?? '(no endpoint recorded)'
   lines.push(
     running
-      ? `  on          WireGuard running, Peers reach the Target at ${status.endpoint ?? '(no endpoint recorded)'}:${status.port}`
+      ? `  on          WireGuard running, Peers reach the Target at ${dialled}:${status.port}`
       : `  on          but the service is not running — disable and enable access to start it`,
+  )
+  lines.push(
+    status.dns
+      ? `  dns         ${status.dns.publicName} → the public address, kept by ddclient; ${status.dns.internalName} → ${TUNNEL_ADDRESS} (zone ${status.dns.zone})`
+      : `  dns         not configured — Peers dial ${status.endpoint ?? 'the address given when access was enabled'}; set it up from the Access menu`,
   )
   lines.push(
     status.listening.length > 0
@@ -494,6 +644,8 @@ export const formatAccess = (status: AccessStatus): string[] => {
   } else {
     for (const peer of status.peers) lines.push(describePeer(peer))
   }
-  for (const service of exposedAt()) lines.push(`  exposed     ${service}`)
+  for (const service of exposedAt(EXPOSED_SERVICES, status.dns)) {
+    lines.push(`  exposed     ${service}`)
+  }
   return lines
 }

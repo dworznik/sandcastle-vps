@@ -1,13 +1,25 @@
 import { writeFile } from 'node:fs/promises'
 import {
+  CLOUDFLARE_TOKEN_KEY,
+  DNS_ZONE_KEY,
   ENDPOINT_KEY,
+  EXPOSED_SERVICES,
+  INTERNAL_NAME_KEY,
+  PUBLIC_NAME_KEY,
+  TUNNEL_ADDRESS,
   accessComposeScript,
   accessDown,
   accessPort,
   accessUp,
+  defaultDnsNames,
   describePeer,
+  dnsRecordScript,
   endpointFrom,
   exposedAt,
+  exposedFor,
+  parseDnsRecord,
+  peerEndpoint,
+  readDns,
   nextPeerAddress,
   parsePeers,
   peerConfig,
@@ -15,9 +27,11 @@ import {
   removePeerScript,
   renderPeer,
   renderPeersFile,
+  validateDnsName,
   validateKey,
   validatePeerName,
   writeAccessFileScript,
+  type AccessDns,
   type Peer,
 } from './access.js'
 import type { Connector } from './connectors/types.js'
@@ -79,7 +93,7 @@ export const applyAccess = async (
 
   await accessUp(connector, profile.installDir, envContent, log)
   log(`\nAccess is up: WireGuard on udp/${accessPort(envContent)}. Exposed over it:`)
-  for (const service of exposedAt()) log(`  ${service}`)
+  for (const service of exposedFor(envContent)) log(`  ${service}`)
   log('\nNext: add a Peer, from the menu.')
 }
 
@@ -161,7 +175,8 @@ export const addPeer = async (
   const { installDir } = profile
   const envContent = await withAccessOn(connector, installDir, log)
   if (envContent === undefined) return undefined
-  const endpoint = readEnv(envContent, ENDPOINT_KEY)
+  // The public name once DNS is configured, the recorded address before.
+  const endpoint = peerEndpoint(envContent)
   if (!endpoint) {
     log('\nNo endpoint is recorded for this Target. Disable and enable access to set one.')
     return undefined
@@ -229,7 +244,7 @@ export const addPeer = async (
   }
 
   log(`\n${name} is ${peer.address} on the tunnel. Once connected, reach:`)
-  for (const service of exposedAt()) log(`  ${service}`)
+  for (const service of exposedFor(envContent)) log(`  ${service}`)
   return peer
 }
 
@@ -286,14 +301,100 @@ export const revokePeer = async (
   return peer
 }
 
-/** The menu's "Access": the Peer actions, under one entry. */
+/**
+ * The menu's "Set up DNS": the optional layer of ADR 0011. A zone on
+ * Cloudflare and an API token, both into the Target's Local Config and
+ * neither kept here; then the service brought up to date, so ddclient runs;
+ * then the two records written through the token from inside the container.
+ * Returns the names, or `undefined` when nothing was set up.
+ *
+ * Re-runnable: the names are re-asked with what is recorded as the default,
+ * the token is kept unless the operator says to replace it, and a record
+ * that exists is updated rather than duplicated.
+ */
+export const setupDns = async (
+  { profile, connector, prompter }: AccessSession,
+  log: Log = console.log,
+): Promise<AccessDns | undefined> => {
+  const { installDir } = profile
+  const envContent = await withAccessOn(connector, installDir, log)
+  if (envContent === undefined) return undefined
+  const recorded = readDns(envContent)
+
+  log('\nDNS for Access is optional: a domain on Cloudflare gives Peers a name to dial')
+  log('and each Exposed Service a name to open, instead of addresses (ADR 0011).')
+  const zone = validateDnsName(
+    await prompter.text('The zone on Cloudflare (a domain you manage there)', recorded?.zone),
+  )
+  const defaults = defaultDnsNames(profile.name, zone)
+  const publicName = validateDnsName(
+    await prompter.text(
+      "The public name — this Target's address, what Peers dial",
+      recorded?.zone === zone ? recorded.publicName : defaults.publicName,
+    ),
+  )
+  const internalName = validateDnsName(
+    await prompter.text(
+      `The internal name — the tunnel address ${TUNNEL_ADDRESS}, what services are opened at`,
+      recorded?.zone === zone ? recorded.internalName : defaults.internalName,
+    ),
+  )
+
+  // The token is a credential: asked for hidden, sent over stdin inside the
+  // environment file like the others, and kept once held unless replaced.
+  let updated = envContent
+  const held = readEnv(envContent, CLOUDFLARE_TOKEN_KEY) !== undefined
+  if (!held || (await prompter.confirm('A Cloudflare token is already held. Replace it?'))) {
+    log('\nAn API token with Zone:Read and DNS:Edit on that zone. It is not echoed.')
+    const token = await prompter.secret('Cloudflare API token')
+    updated = upsertEnv(updated, CLOUDFLARE_TOKEN_KEY, token.trim(), 'rotate')
+  }
+  for (const [key, value] of [
+    [DNS_ZONE_KEY, zone],
+    [PUBLIC_NAME_KEY, publicName],
+    [INTERNAL_NAME_KEY, internalName],
+  ] as const) {
+    updated = upsertEnv(updated, key, value, 'rotate')
+  }
+  await writeTargetEnv(connector, installDir, updated)
+  const dns: AccessDns = { zone, publicName, internalName }
+
+  // The service first: the compose project gains ddclient, and the record
+  // writer runs inside the Access container, which has to be up.
+  await accessUp(connector, installDir, updated, log)
+
+  log('\nWriting the records through the token…')
+  const token = readEnv(updated, CLOUDFLARE_TOKEN_KEY) ?? ''
+  for (const [name, content] of [
+    [publicName, 'auto'],
+    [internalName, TUNNEL_ADDRESS],
+  ] as const) {
+    const written = await connector.exec(dnsRecordScript(installDir, zone, name, content), {
+      stdin: token,
+    })
+    if (written.code !== 0)
+      throw fail(`Writing the record for ${name}`, written.code, written.stderr)
+    const record = parseDnsRecord(written.stdout)
+    log(`  ${record.name} → ${record.content} (${record.action})`)
+  }
+
+  log(`\nPeers added from now on dial ${publicName}; those added before keep the address, which`)
+  log('ddclient keeps the name pointed at. Exposed over Access:')
+  for (const service of exposedAt(EXPOSED_SERVICES, dns)) log(`  ${service}`)
+  return dns
+}
+
+/** The menu's "Access": the Peer actions and the optional DNS layer, under
+ *  one entry. */
 export const accessMenu = async (session: AccessSession, log: Log = console.log): Promise<void> => {
-  const actions: Choice<'add' | 'revoke' | null>[] = [
+  const actions: Choice<'add' | 'revoke' | 'dns' | null>[] = [
     { label: 'Add a Peer', value: 'add' },
     { label: 'Revoke a Peer', value: 'revoke' },
+    { label: 'Set up DNS — names for the Target and its services, on Cloudflare', value: 'dns' },
     { label: 'Back', value: null },
   ]
   const action = await session.prompter.select('Access', actions)
   if (action === 'add') await addPeer(session, log)
   if (action === 'revoke') await revokePeer(session, log)
+  if (action === 'dns') await setupDns(session, log)
 }
