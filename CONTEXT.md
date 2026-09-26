@@ -50,7 +50,8 @@ The isolated container sandcastle spawns for a single Run, containing the agent 
 
 ### Session
 
-An attended terminal on a Project, in a long-lived container built from that Project's image, where the operator works directly rather than by Dispatching a Run. One per Project; sessions are tmux windows inside it, so they survive a dropped connection. A Session is not a Sandbox — it may start one. Its commits sign with the agent's key, like a Run's.
+The long-lived container on a Project, built from that Project's image, in which the operator works directly rather than by Dispatching a Run — the thing one attaches to. One per Project. The terminals inside it are windows of its multiplexer, so they survive a dropped connection; a window is not a Session, and there are never two Sessions on one Project. A Session is not a Sandbox — it may start one. Its commits sign with the agent's key, like a Run's; the operator's Claude Code inside it uses the operator's own login.
+_Avoid_: window, tmux session
 
 ### Loop
 
@@ -78,7 +79,23 @@ A Target that executes Runs and nothing else. It holds agent credentials only, s
 
 ### Workstation Target
 
-A Target that also hosts Sessions. It holds no credentials a Run-only Target does not; what sets it apart is that it exposes the Docker socket to containers built from Projects' own Dockerfiles, which makes it a machine the operator must trust. Enabled deliberately, never by installing.
+A Target that also hosts Sessions and the Memory. Two things set it apart from a Run-only Target, and both are why the operator must trust it: it holds the operator's own Claude login, and it exposes the Docker socket to containers built from Projects' own Dockerfiles. Enabled deliberately, never by installing.
+
+### Memory
+
+The one store of what the agent observed across Sessions on a Target, and the service that keeps it. Shared by every Session; kept distinct per Project. A Run does not write to it — a Run's record is its Run Log.
+
+### Access
+
+The private network through which the operator's own devices reach a Target's Exposed Services without a login on each. Enabled per Target, independently of Sessions; a Run-only Target may have it.
+
+### Peer
+
+One of the operator's devices admitted to a Target's Access. Added and revoked one at a time; the Target keeps the list.
+
+### Exposed Service
+
+A service on the Target reachable over Access. Nothing is exposed unless it is listed; the Dispatch surface is never listed.
 
 ### Connector
 

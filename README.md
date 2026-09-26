@@ -1,8 +1,8 @@
 # sandcastle-vps
 
-A [sandcastle](https://github.com/mattpocock/sandcastle) harness for the VPS: dispatch background agent Runs against the project checkouts you already work on in [claude-tmux](https://github.com/dworznik/claude-tmux) sessions. A task description goes in; a `sandcastle/<slug>` Task Branch comes out — visible immediately in your live checkout, pushed, and proposed as a pull request.
+An agent VPS you set up with one command: a Target that runs unattended agent Runs against your project checkouts, hosts the attended Sessions you work in yourself, and gives your own devices secure access to its services. The default install is the Run-only half, built on [sandcastle](https://github.com/mattpocock/sandcastle): a task description goes in; a `sandcastle/<slug>` Task Branch comes out — visible immediately in your live checkout, pushed, and proposed as a pull request. Sessions and access are enabled per Target, never by installing; see [ADR 0010](docs/adr/0010-the-platform-is-the-operators-agent-vps.md).
 
-See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing decisions (branch-only strategy on shared checkouts; Inngest with retries disabled; strict sandcastle conventions with per-project Onboarding; Delivery inside the Run; the Run Log kept by the Harness).
+See `CONTEXT.md` for the domain language and `docs/adr/` for the load-bearing decisions (branch-only strategy on shared checkouts; Inngest with retries disabled; strict sandcastle conventions with per-project Onboarding; Delivery inside the Run; the Run Log kept by the Harness; the platform as the operator's agent VPS; WireGuard access to exposed services).
 
 ## Architecture
 
@@ -15,7 +15,7 @@ A Run only targets an **Onboarded** Project — a checkout with its own committe
 
 A Project carries no credentials. The agent's identity — Claude token, GitHub token, author name and email, and an ed25519 signing key — belongs to the Harness, which injects it into each Sandbox for the life of one Run: the tokens and author as environment, the key as a read-only mount, and git configured from them before the agent starts. Nothing is written into the Project checkout, and there is nothing to stamp or sync per Project. A Run that finds one of them missing refuses to start and names it rather than running unauthenticated. See [ADR 0006](docs/adr/0006-containerised-harness-and-installer-over-connectors.md).
 
-Nothing listens on the public interface. The Dispatch surface is keyless — reachability _is_ the access control. The two containers meet by service name on the compose network, and only two ports are published on the Target, both on loopback: the Dispatch surface and the dashboard. Every other listener stays inside its container. Remote access goes through an SSH tunnel, and the install checks from the outside that nothing is listening where it shouldn't.
+Nothing listens on the public interface — nothing but WireGuard, on a Target where access is enabled. The Dispatch surface is keyless — reachability _is_ the access control. The two containers meet by service name on the compose network, and only two ports are published on the Target, both on loopback: the Dispatch surface and the dashboard. Every other listener stays inside its container. Remote access goes through an SSH tunnel, or over the VPN to the services deliberately exposed on it (never the Dispatch surface; see [ADR 0011](docs/adr/0011-wireguard-access-to-exposed-services.md)), and the install checks from the outside that nothing is listening where it shouldn't.
 
 ![Where every container lives across the dev machine, the OrbStack stand-in and the VPS](docs/diagrams/host-topology.svg)
 
@@ -91,7 +91,7 @@ A Run that completes then **Delivers**: it pushes the Task Branch and opens a pu
 
 The Run's result says which of four things happened — `delivered`, `updated`, `nothing-to-deliver`, or `skipped` because the Run did not complete — with the pull request URL on the first two and a reason on the last two. A Delivery that cannot be completed fails the Run and names the branch and its commits; a Run that reports success always has a pull request or a reason there is none. See [ADR 0008](docs/adr/0008-delivery-inside-the-run.md).
 
-From anywhere else (your laptop, a claude-tmux dev container), tunnel first and point the command at your end of it:
+From anywhere else (your laptop, a Session on another Target), tunnel first and point the command at your end of it:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 your-vps
