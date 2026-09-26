@@ -47,7 +47,7 @@
     "@hono/zod-validator": "^0.9.1",
     "hono": "^4.13.7",
     "inngest": "^4.12.1",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.15",
     "zod": "^4.4.3"
   },
   "devDependencies": {
