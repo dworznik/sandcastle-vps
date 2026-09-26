@@ -4,7 +4,14 @@ import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js
 import { composeScript, harnessPort, readEnvScript } from './install.js'
 import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
 import { OFF, describePosture, readToggles, type Toggles } from './posture.js'
-import { listScript, parseSessions, type RunningSession } from './session-files.js'
+import {
+  listScript,
+  loginScript,
+  parseLogin,
+  parseSessions,
+  type ClaudeLogin,
+  type RunningSession,
+} from './session-files.js'
 import { parseProjects, projectsScript, type RemoteProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { parseProbe } from './preflight.js'
@@ -77,6 +84,9 @@ export interface StatusReport {
   /** Every running Session, found through the engine — they are not in the
    *  stack's compose project, by design (ADR 0007). */
   readonly sessions: readonly RunningSession[]
+  /** Whether the operator's Claude login is in the shared volume (ADR 0010).
+   *  Read by presence only; the login itself is never read. */
+  readonly claudeLogin: ClaudeLogin
   /** The platform network, absent on a Target installed before it existed
    *  and not upgraded since. */
   readonly network: PlatformNetwork
@@ -163,22 +173,25 @@ export const gatherStatus = async ({
       missingCredentials: [],
       toggles: OFF,
       sessions: [],
+      claudeLogin: 'no-volume',
       network: { present: false },
       access: ACCESS_OFF,
     }
   }
 
   const port = harnessPort(envContent)
-  const [ps, apps, listeners, projects, images, network, running, access] = await Promise.all([
-    connector.exec(composeScript(profile.installDir, 'ps')),
-    connector.exec(appsQueryScript(profile.installDir)),
-    connector.exec(LISTENERS_SCRIPT),
-    connector.exec(projectsScript(profile.installDir, port)),
-    connector.exec(imagesScript()),
-    connector.exec(networkScript()),
-    connector.exec(listScript()),
-    gatherAccess(connector, profile.installDir, envContent),
-  ])
+  const [ps, apps, listeners, projects, images, network, running, login, access] =
+    await Promise.all([
+      connector.exec(composeScript(profile.installDir, 'ps')),
+      connector.exec(appsQueryScript(profile.installDir)),
+      connector.exec(LISTENERS_SCRIPT),
+      connector.exec(projectsScript(profile.installDir, port)),
+      connector.exec(imagesScript()),
+      connector.exec(networkScript()),
+      connector.exec(listScript()),
+      connector.exec(loginScript(profile.installDir)),
+      gatherAccess(connector, profile.installDir, envContent),
+    ])
 
   const built = new Set(
     images.stdout
@@ -213,6 +226,7 @@ export const gatherStatus = async ({
     missingCredentials: missing(envContent),
     toggles: readToggles(envContent),
     sessions: parseSessions(running.stdout),
+    claudeLogin: parseLogin(login.stdout),
     network: parseNetwork(network.stdout),
     access,
   }
@@ -305,6 +319,17 @@ export const formatStatus = (report: StatusReport): string => {
     for (const session of report.sessions) {
       lines.push(`  ${session.project.padEnd(24)}${session.status}`)
     }
+  }
+  // The login is the second Claude credential a Workstation Target holds
+  // (ADR 0010), and the one a Session cannot work without; said whenever
+  // the volume exists, and on a Workstation Target whether or not it does.
+  if (report.toggles.sessions || report.claudeLogin !== 'no-volume') {
+    const login = {
+      present: 'present in the shared volume — serves every Session, refreshes itself',
+      absent: 'absent — run `claude auth login` inside any Session',
+      'no-volume': 'the shared login volume is not there yet — opening a Session creates it',
+    }[report.claudeLogin]
+    lines.push(`  ${'Claude login'.padEnd(24)}${login}`)
   }
 
   lines.push('', 'Containers', report.containers || '  (none)')

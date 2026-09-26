@@ -48,6 +48,8 @@ interface TargetState {
   readonly network?: string
   /** What `docker ps` printed for the session containers. */
   readonly sessions?: string
+  /** What the login probe printed; empty for a Target with no login volume. */
+  readonly login?: string
   /** The Access service's `compose ps` line; empty when it is not up. */
   readonly accessService?: string
   readonly udp?: string
@@ -89,6 +91,7 @@ const fakeConnector = (state: TargetState = {}) => {
       if (script.includes('compose ps')) return ok('NAME      STATUS\nharness   Up 2 hours')
       if (script.includes('docker network inspect')) return ok(state.network ?? JOINED)
       if (script.includes('docker ps --filter')) return ok(state.sessions ?? '')
+      if (script.includes('docker volume inspect')) return ok(state.login ?? 'volume\tabsent\n')
       if (script.includes('/access') && script.includes('compose ps')) {
         return ok(state.accessService ?? '')
       }
@@ -204,6 +207,23 @@ describe('gatherStatus', () => {
     expect(formatStatus(report)).toContain('sessions is off')
   })
 
+  // The second Claude credential a Workstation Target holds (ADR 0010), read
+  // by presence only. A Run-only Target with no volume has nothing to say.
+  it('says whether the operator’s Claude login is there on a Workstation Target', async () => {
+    const workstation = `${FULL_ENV}SESSIONS_ENABLED=true\n`
+    const loggedIn = await gather({ env: workstation, login: 'volume\tpresent\nlogin\tpresent\n' })
+    expect(loggedIn.report.claudeLogin).toBe('present')
+    expect(formatStatus(loggedIn.report)).toContain('Claude login            present')
+
+    const fresh = await gather({ env: workstation, login: 'volume\tpresent\nlogin\tabsent\n' })
+    expect(fresh.report.claudeLogin).toBe('absent')
+    expect(formatStatus(fresh.report)).toContain('claude auth login')
+
+    const runOnly = await gather()
+    expect(runOnly.report.claudeLogin).toBe('no-volume')
+    expect(formatStatus(runOnly.report)).not.toContain('Claude login')
+  })
+
   // With access on, WireGuard's UDP port is the one intended public listener,
   // and the TCP exposure check is unchanged by it.
   it('reports the WireGuard port as the intended public listener with access on', async () => {
@@ -312,6 +332,7 @@ describe('formatStatus', () => {
     missingCredentials: [],
     toggles: { sessions: false, access: false },
     sessions: [],
+    claudeLogin: 'no-volume',
     network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
     access: { enabled: false, port: 51820, peers: [], service: '', listening: [] },
     ...overrides,

@@ -3,22 +3,32 @@ import type { Connector, ExecOptions, ExecResult } from './connectors/types.js'
 import { PLATFORM_NETWORK } from './network.js'
 import type { Choice, Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
+import { SANDBOX_SIGNING_KEY_PATH, gitSetupCommand } from '../git-setup.js'
 import {
+  CLAUDE_HOME,
+  CLAUDE_VOLUME,
+  RUN_TOKEN_KEY,
   SESSION_LABEL,
+  SESSION_SIGNING_KEY_PATH,
   attachScript,
   devcontainer,
+  ensureClaudeVolumeScript,
   listScript,
+  loginScript,
+  parseLogin,
   parseSessions,
   sessionCompose,
+  sessionInit,
+  sessionProfile,
   sessionProject,
   startScript,
   stopScript,
-  writeComposeScript,
   writeDevcontainerScript,
   writeSessionArtifacts,
+  writeSessionFileScript,
   type SessionSpec,
 } from './session-files.js'
-import { sessionsMenu } from './sessions.js'
+import { FIRST_TIME, applySessions, sessionsMenu } from './sessions.js'
 
 const profile: TargetProfile = {
   name: 'vps',
@@ -34,7 +44,18 @@ const spec: SessionSpec = {
   installDir: '/home/op/.sandcastle-vps',
   workspaceRoot: '/home/op/work',
   dockerGid: '988',
+  secretsDir: '/home/op/.sandcastle-vps/secrets',
 }
+
+/** The keys the compose file sets on the container, read the way compose
+ *  reads them: the indented `KEY:` lines under `environment:`. */
+const environmentKeys = (compose: string): string[] =>
+  (compose.split('    environment:\n')[1]?.split(/\n {4}\S/u)[0] ?? '')
+    .split('\n')
+    .flatMap((line) => {
+      const match = /^ {6}([A-Z_]+):/u.exec(line)
+      return match?.[1] ? [match[1]] : []
+    })
 
 describe('sessionCompose', () => {
   const compose = sessionCompose(spec)
@@ -71,17 +92,115 @@ describe('sessionCompose', () => {
     expect(compose).toContain('SHELL: /bin/bash')
   })
 
-  // ADR 0010: a session container with the Run token in its environment
-  // silently ignores the operator's own login. Credentials are #88's slice,
-  // and until then nothing at all is injected.
-  it('injects no credential, and never the Run token', () => {
-    expect(compose).not.toContain('CLAUDE_CODE_OAUTH_TOKEN')
-    expect(compose).not.toContain('GH_TOKEN')
-    expect(compose).not.toContain('AGENT_SIGNING_KEY')
+  // ADR 0007's credentials clause as ADR 0010 narrowed it: what a Sandbox
+  // gets for git, and not the Claude credential.
+  it('carries what a Sandbox gets for git, filled from the Target’s environment file', () => {
+    expect(environmentKeys(compose)).toEqual(
+      expect.arrayContaining(['GH_TOKEN', 'AGENT_GIT_NAME', 'AGENT_GIT_EMAIL']),
+    )
+    expect(compose).toContain('GH_TOKEN: ${GH_TOKEN:-}')
+    expect(compose).toContain('"/home/op/.sandcastle-vps/secrets:/home/agent/.sandcastle-agent:ro"')
+  })
+
+  // A session container with the Run token under the name Claude Code reads
+  // silently ignores the operator's own login (ADR 0010).
+  it('never sets CLAUDE_CODE_OAUTH_TOKEN on the container', () => {
+    expect(environmentKeys(compose)).not.toContain('CLAUDE_CODE_OAUTH_TOKEN')
+  })
+
+  it('carries the Run token under its non-magic name, for a Sandbox started from here', () => {
+    expect(environmentKeys(compose)).toContain(RUN_TOKEN_KEY)
+    expect(compose).toContain(`${RUN_TOKEN_KEY}: \${CLAUDE_CODE_OAUTH_TOKEN:-}`)
+  })
+
+  // No token value ever lands in the generated file: the names are compose
+  // interpolations, and the Target's .env stays the one place a token is.
+  it('holds no secret itself', () => {
+    expect(compose).not.toMatch(/(?:GH_TOKEN|AGENT_GIT_NAME|CLAUDE_CODE_OAUTH_TOKEN): [^$]/u)
+  })
+
+  it('mounts the shared login volume, external, and points Claude Code at it', () => {
+    expect(compose).toContain(`- ${CLAUDE_VOLUME}:${CLAUDE_HOME}`)
+    expect(compose).toContain(`volumes:\n  ${CLAUDE_VOLUME}:\n    external: true`)
+    expect(compose).toContain(`CLAUDE_CONFIG_DIR: ${CLAUDE_HOME}`)
+  })
+
+  it('starts through the init script, mounted read-only from the Session directory', () => {
+    expect(compose).toContain('entrypoint: ["/bin/bash", "/opt/sandcastle-vps/session-init.sh"]')
+    expect(compose).toContain('"/home/op/.sandcastle-vps/sessions/todo:/opt/sandcastle-vps:ro"')
+    expect(compose).toContain(
+      '"/home/op/.sandcastle-vps/sessions/todo/profile.sh:/etc/profile.d/sandcastle-vps.sh:ro"',
+    )
   })
 
   it('quotes a name a shell or YAML would otherwise read', () => {
     expect(sessionCompose({ ...spec, name: 'my.app' })).toContain('hostname: "my.app"')
+  })
+})
+
+describe('sessionInit', () => {
+  const init = sessionInit()
+
+  // The same configuration a Run's Sandbox gets — the same command, with the
+  // key where this container has it — so a commit from a Session is the
+  // agent's (ADR 0007).
+  it('configures git exactly as a Run does, with the key where the Session mounts it', () => {
+    expect(init).toContain(gitSetupCommand(SESSION_SIGNING_KEY_PATH))
+    expect(SESSION_SIGNING_KEY_PATH).not.toBe(SANDBOX_SIGNING_KEY_PATH)
+    expect(init).toContain('gh auth git-credential')
+    expect(init).toContain('commit.gpgsign true')
+  })
+
+  it('reads every value from the environment, since it lands on disk', () => {
+    expect(init).toContain('"$AGENT_GIT_NAME"')
+    expect(init).not.toMatch(/github_pat|sk-ant/u)
+  })
+
+  it('then becomes the image’s own main process', () => {
+    expect(init.trim().split('\n').at(-1)).toBe('exec sleep infinity')
+  })
+})
+
+describe('sessionProfile', () => {
+  const profileFile = sessionProfile()
+
+  // The bridge from the non-magic name to the one a Sandbox reads, for that
+  // process only.
+  it('hands the Run token to a Sandbox started from the Session, and to nothing else', () => {
+    expect(profileFile).toContain(
+      `CLAUDE_CODE_OAUTH_TOKEN="\${${RUN_TOKEN_KEY}:-}" command sandcastle "$@"`,
+    )
+    expect(profileFile).not.toMatch(/^export CLAUDE_CODE_OAUTH_TOKEN/mu)
+  })
+})
+
+describe('ensureClaudeVolumeScript', () => {
+  it('creates the volume only when it is not already there', () => {
+    expect(ensureClaudeVolumeScript()).toContain(`docker volume inspect ${CLAUDE_VOLUME}`)
+    expect(ensureClaudeVolumeScript()).toContain(`|| docker volume create ${CLAUDE_VOLUME}`)
+  })
+})
+
+describe('loginScript and parseLogin', () => {
+  const script = loginScript('/home/op/.sandcastle-vps')
+
+  // Presence, never content: the login is the operator's.
+  it('reads whether the login file exists and never its content', () => {
+    expect(script).toContain('test')
+    expect(script).toContain('-s /claude/.credentials.json')
+    expect(script).toContain(`${CLAUDE_VOLUME}:/claude:ro`)
+    expect(script).not.toContain('cat ')
+  })
+
+  it('answers without a container when the volume is not there', () => {
+    expect(script).toContain(`docker volume inspect ${CLAUDE_VOLUME}`)
+    expect(parseLogin('volume\tabsent\n')).toBe('no-volume')
+  })
+
+  it('tells a logged-in volume from an empty one', () => {
+    expect(parseLogin('volume\tpresent\nlogin\tpresent\n')).toBe('present')
+    expect(parseLogin('volume\tpresent\nlogin\tabsent\n')).toBe('absent')
+    expect(parseLogin('')).toBe('no-volume')
   })
 })
 
@@ -101,9 +220,9 @@ describe('devcontainer', () => {
   })
 })
 
-describe('writeComposeScript', () => {
+describe('writeSessionFileScript', () => {
   it('writes under the install directory, from stdin', () => {
-    const script = writeComposeScript('/home/op/.sandcastle-vps', 'todo')
+    const script = writeSessionFileScript('/home/op/.sandcastle-vps', 'todo', 'compose.yaml')
     expect(script).toContain("mkdir -p '/home/op/.sandcastle-vps/sessions/todo'")
     expect(script).toContain("cat > '/home/op/.sandcastle-vps/sessions/todo'/compose.yaml")
   })
@@ -132,12 +251,23 @@ describe('startScript', () => {
   it('is idempotent: a running Session is found, not started again', () => {
     expect(script).toContain(`label=${SESSION_LABEL}=todo`)
     expect(script).toContain("printf 'state\\trunning\\n'")
-    expect(script).toContain('docker compose up -d')
+    expect(script).toContain(' up -d')
   })
 
   it('says the image is not built rather than letting compose try to pull it', () => {
     expect(script).toContain("docker image inspect 'sandcastle:todo'")
     expect(script).toContain('is not built')
+  })
+
+  // The credentials are compose interpolations; the Target's own environment
+  // file is what fills them, and nothing else ever holds them.
+  it('fills the credentials from the Target’s environment file at up', () => {
+    expect(script).toContain("docker compose --env-file '/home/op/.sandcastle-vps/.env' up -d")
+  })
+
+  it('makes sure the login volume exists before compose looks for it', () => {
+    expect(script.indexOf('docker volume inspect')).toBeLessThan(script.indexOf('compose'))
+    expect(script).toContain(ensureClaudeVolumeScript())
   })
 })
 
@@ -158,8 +288,13 @@ describe('attachScript', () => {
 describe('stopScript', () => {
   it('takes the compose project down, in its own directory', () => {
     expect(stopScript('/home/op/.sandcastle-vps', 'todo')).toContain(
-      "cd '/home/op/.sandcastle-vps/sessions/todo' && docker compose down",
+      "cd '/home/op/.sandcastle-vps/sessions/todo' && docker compose --env-file " +
+        "'/home/op/.sandcastle-vps/.env' down",
     )
+  })
+
+  it('never removes the login volume', () => {
+    expect(stopScript('/home/op/.sandcastle-vps', 'todo')).not.toMatch(/down.*(?:-v|--volumes)/u)
   })
 })
 
@@ -221,7 +356,9 @@ const fakeConnector = ({
       const ok = (stdout: string): Promise<ExecResult> =>
         Promise.resolve({ code: 0, stdout, stderr: '' })
       if (script.includes('"version"')) return ok(`version\t${version}\n`)
-      if (script.includes('/.env')) return ok(env)
+      // The environment file is read with `cat`; the start and stop scripts
+      // name it too, as compose's `--env-file`, and are not reads of it.
+      if (script.startsWith('cat ') && script.includes('/.env')) return ok(env)
       if (script.includes('/projects')) return ok(JSON.stringify({ projects }))
       if (script.includes('docker ps --filter')) return ok(running)
       if (script.includes('docker image inspect')) return ok(start)
@@ -305,7 +442,7 @@ describe('sessionsMenu', () => {
     const dev = ran.find((call) => call.script.includes('devcontainer.json'))
     expect(dev?.stdin).toContain('"service": "session"')
 
-    expect(ran.some((call) => call.script.includes('docker compose up -d'))).toBe(true)
+    expect(ran.some((call) => call.script.includes(' up -d'))).toBe(true)
     expect(attached).toEqual([attachScript('todo')])
     expect(wasSuspended()).toBe(true)
     expect(shown).toContain('keeps running')
@@ -326,7 +463,7 @@ describe('sessionsMenu', () => {
   it('offers to stop a running Session, and stops it explicitly', async () => {
     const { result, ran, attached } = await run({ stop: 'todo' }, { running: 'todo\tUp 2 hours\n' })
     expect(result).toEqual({ stopped: 'todo' })
-    expect(ran.some((call) => call.script.includes('docker compose down'))).toBe(true)
+    expect(ran.some((call) => call.script.includes(' down'))).toBe(true)
     expect(attached).toEqual([])
   })
 
@@ -362,5 +499,42 @@ describe('writeSessionArtifacts', () => {
     await expect(writeSessionArtifacts(connector, { ...spec, dockerGid: '' })).rejects.toThrow(
       /DOCKER_GID/,
     )
+  })
+
+  it('writes the compose file, the init script and the profile beside each other', async () => {
+    const { connector, ran } = fakeConnector()
+    await writeSessionArtifacts(connector, spec)
+    const written = ran
+      .filter((call) => call.script.includes("cat > '/home/op/.sandcastle-vps/sessions/todo'/"))
+      .map((call) => call.script.split('/').at(-1))
+    expect(written).toEqual(['compose.yaml', 'session-init.sh', 'profile.sh'])
+    expect(ran.find((call) => call.script.endsWith('session-init.sh'))?.stdin).toBe(sessionInit())
+  })
+})
+
+describe('applySessions', () => {
+  const apply = async (enabled: boolean) => {
+    const { connector, ran } = fakeConnector()
+    const lines: string[] = []
+    await applySessions({ profile, connector }, enabled, (line) => lines.push(line))
+    return { ran, shown: lines.join('\n') }
+  }
+
+  // The volume is external, so something outside every Session's compose
+  // project has to make it: enabling the toggle is that something.
+  it('creates the shared login volume when sessions is enabled, and prints the checklist', async () => {
+    const { ran, shown } = await apply(true)
+    expect(ran.some((call) => call.script === ensureClaudeVolumeScript())).toBe(true)
+    expect(shown).toContain(FIRST_TIME)
+    expect(shown).toContain('claude auth login')
+  })
+
+  // Disabling gates new Sessions; it neither stops running ones nor forgets
+  // the login, which would make re-enabling a second first-time setup.
+  it('keeps the volume and the running Sessions when sessions is disabled', async () => {
+    const { ran, shown } = await apply(false)
+    expect(ran).toEqual([])
+    expect(shown).toContain('is kept')
+    expect(shown).toContain('keep running')
   })
 })

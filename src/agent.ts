@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import type { SandboxHooks } from '@ai-hero/sandcastle'
 import type { DockerOptions } from '@ai-hero/sandcastle/sandboxes/docker'
 import { CREDENTIAL_KEYS, type AgentCredentials } from './env.js'
+import { SANDBOX_SIGNING_KEY_PATH, gitSetupCommand } from './git-setup.js'
 import { INSTALL_HOOKS_COMMAND, SANDBOX_HOOKS_FILE } from './run-logs/hooks.js'
 
 /** sandcastle names this `MountConfig` but does not export it; take it from
@@ -15,34 +16,12 @@ type Mount = NonNullable<DockerOptions['mounts']>[number]
  * carries no credentials of its own.
  */
 
-/**
- * Where the signing key is mounted, read-only, inside the Sandbox.
- *
- * A bind mount carries the file's mode and owner through unchanged, and
- * `ssh-keygen -Y sign` refuses a private key that is group- or world-readable.
- * So whatever generates the key on the Target owes it mode 600 owned by the
- * operator — the same uid the Sandbox runs as, since sandcastle takes the
- * container's user from this process. The wizard's credential capture owes it
- * that (`src/cli/signing-key.ts`); this only names the file.
- */
-export const SANDBOX_SIGNING_KEY_PATH = '/home/agent/.sandcastle-agent/signing_key'
-
-/**
- * Runs in the Sandbox as the agent user, after sandcastle's own git setup and
- * before the agent starts — so this wins where the two disagree, which is the
- * author identity sandcastle copies off the host checkout.
- *
- * Every secret is read from the environment rather than interpolated: sandcastle
- * prints each hook's command as it runs it, and a token in that string would be
- * a token in the Run's log.
- */
-export const GIT_SETUP_COMMAND = `set -eu
-git config --global user.name "$AGENT_GIT_NAME"
-git config --global user.email "$AGENT_GIT_EMAIL"
-git config --global credential.helper '!gh auth git-credential'
-git config --global gpg.format ssh
-git config --global user.signingkey ${SANDBOX_SIGNING_KEY_PATH}
-git config --global commit.gpgsign true`
+/** The Sandbox's git configuration: the shared command (src/git-setup.ts)
+ *  with the key where a Sandbox mounts it. A Session runs the same command
+ *  with the key where it mounts it, which is why the command is a function
+ *  of the path rather than a constant with a second copy for Sessions. */
+export const GIT_SETUP_COMMAND = gitSetupCommand(SANDBOX_SIGNING_KEY_PATH)
+export { SANDBOX_SIGNING_KEY_PATH }
 
 /** What a Run hands sandcastle so the Sandbox can commit, sign and push. */
 export interface AgentSandbox {
