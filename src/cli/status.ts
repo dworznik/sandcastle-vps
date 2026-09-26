@@ -2,6 +2,7 @@ import { ACCESS_OFF, formatAccess, gatherAccess, type AccessStatus } from './acc
 import type { Connector, ExecResult } from './connectors/types.js'
 import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js'
 import { composeScript, harnessPort, readEnvScript } from './install.js'
+import { MEMORY_OFF, formatMemory, gatherMemory, type MemoryStatus } from './memory.js'
 import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
 import { OFF, describePosture, readToggles, type Toggles } from './posture.js'
 import {
@@ -87,6 +88,9 @@ export interface StatusReport {
   /** Whether the operator's Claude login is in the shared volume (ADR 0010).
    *  Read by presence only; the login itself is never read. */
   readonly claudeLogin: ClaudeLogin
+  /** The Memory service (ADR 0010): up with sessions, and what the worker
+   *  answers over the platform network. */
+  readonly memory: MemoryStatus
   /** The platform network, absent on a Target installed before it existed
    *  and not upgraded since. */
   readonly network: PlatformNetwork
@@ -174,13 +178,14 @@ export const gatherStatus = async ({
       toggles: OFF,
       sessions: [],
       claudeLogin: 'no-volume',
+      memory: MEMORY_OFF,
       network: { present: false },
       access: ACCESS_OFF,
     }
   }
 
   const port = harnessPort(envContent)
-  const [ps, apps, listeners, projects, images, network, running, login, access] =
+  const [ps, apps, listeners, projects, images, network, running, login, memory, access] =
     await Promise.all([
       connector.exec(composeScript(profile.installDir, 'ps')),
       connector.exec(appsQueryScript(profile.installDir)),
@@ -190,6 +195,7 @@ export const gatherStatus = async ({
       connector.exec(networkScript()),
       connector.exec(listScript()),
       connector.exec(loginScript(profile.installDir)),
+      gatherMemory(connector, profile.installDir, envContent),
       gatherAccess(connector, profile.installDir, envContent),
     ])
 
@@ -227,6 +233,7 @@ export const gatherStatus = async ({
     toggles: readToggles(envContent),
     sessions: parseSessions(running.stdout),
     claudeLogin: parseLogin(login.stdout),
+    memory,
     network: parseNetwork(network.stdout),
     access,
   }
@@ -331,6 +338,10 @@ export const formatStatus = (report: StatusReport): string => {
     }[report.claudeLogin]
     lines.push(`  ${'Claude login'.padEnd(24)}${login}`)
   }
+
+  // After the Sessions, because it is theirs: the one worker every Session
+  // records into, up and down with the same toggle (ADR 0010).
+  lines.push('', 'Memory', ...formatMemory(report.memory))
 
   lines.push('', 'Containers', report.containers || '  (none)')
 

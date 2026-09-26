@@ -53,6 +53,9 @@ interface TargetState {
   /** The Access service's `compose ps` line; empty when it is not up. */
   readonly accessService?: string
   readonly udp?: string
+  /** The Memory service's `compose ps` line, and what its worker answered. */
+  readonly memoryService?: string
+  readonly memoryHealth?: string
 }
 
 const BOUND_UDP = [
@@ -73,6 +76,12 @@ const fakeConnector = (state: TargetState = {}) => {
       const ok = (stdout: string): Promise<ExecResult> =>
         Promise.resolve({ code: 0, stdout, stderr: '' })
       if (script.includes('"version"')) return ok(`version\t${state.version ?? '0.1.0'}`)
+      // Before the environment file: the Memory compose scripts name it as
+      // `--env-file`, and are not reads of it.
+      if (script.includes('/memory') && script.includes('compose --env-file')) {
+        return ok(state.memoryService ?? '')
+      }
+      if (script.includes('/api/health')) return ok(state.memoryHealth ?? '')
       if (script.includes('/.env')) return ok(state.env ?? FULL_ENV)
       if (script.includes('/projects')) {
         return ok(
@@ -247,6 +256,39 @@ describe('gatherStatus', () => {
     expect(formatStatus(report)).toMatch(/Access\n {2}off/u)
   })
 
+  // Memory travels with sessions (ADR 0010): a Run-only Target has none, and
+  // the report says it comes with the toggle rather than reading as broken.
+  it('reads a fresh install as Memory off, and asks the worker nothing', async () => {
+    const { report, ran } = await gather()
+    expect(report.memory.enabled).toBe(false)
+    expect(formatStatus(report)).toMatch(/Memory\n {2}off — comes up with sessions/u)
+    expect(ran.some((script) => script.includes('/api/health'))).toBe(false)
+  })
+
+  // The criterion: the health endpoint answers over the platform network by
+  // service name, and status reports the version the worker runs.
+  it('reports the Memory worker’s version, asked over the platform network by name', async () => {
+    const { report, ran } = await gather({
+      env: `${FULL_ENV}SESSIONS_ENABLED=true\n`,
+      memoryService: 'memory\trunning\n',
+      memoryHealth: '{"status":"ok","version":"10.6.2"}',
+    })
+    expect(report.memory.health).toEqual({ ok: true, version: '10.6.2' })
+    expect(ran).toContainEqual(expect.stringContaining('http://memory:37777/api/health'))
+    expect(ran).toContainEqual(expect.stringContaining('--network sandcastle-vps'))
+    const said = formatStatus(report)
+    expect(said).toContain('claude-mem 10.6.2')
+  })
+
+  it('says plainly when the Memory service is up but the plugin is not installed yet', async () => {
+    const { report } = await gather({
+      env: `${FULL_ENV}SESSIONS_ENABLED=true\n`,
+      memoryService: 'memory\trunning\n',
+      memoryHealth: '',
+    })
+    expect(formatStatus(report)).toContain('claude plugin install claude-mem@thedotmack')
+  })
+
   it('reports the platform network and who has joined it', async () => {
     const { report } = await gather()
     expect(report.network).toEqual({
@@ -333,6 +375,7 @@ describe('formatStatus', () => {
     toggles: { sessions: false, access: false },
     sessions: [],
     claudeLogin: 'no-volume',
+    memory: { enabled: false, service: '', health: { ok: false } },
     network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
     access: { enabled: false, port: 51820, peers: [], service: '', listening: [] },
     ...overrides,

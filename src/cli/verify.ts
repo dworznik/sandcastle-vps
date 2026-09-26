@@ -45,8 +45,17 @@ const SYNC_LABEL = 'Harness synced'
  * it is on the Target by definition, because the install just built it.
  */
 export const onTargetLoopback = (installDir: string, command: string): string =>
+  onHarnessImage(installDir, 'host', command)
+
+/**
+ * The same throwaway container, on any network: `host` for the Target's own
+ * loopback, or the platform network to reach a service by name the way
+ * another container would — which is how `status` asks the Memory worker
+ * for its health.
+ */
+export const onHarnessImage = (installDir: string, network: string, command: string): string =>
   `cd ${shellQuote(installDir)} && ` +
-  `docker run --rm --network host "$(docker compose images -q harness | head -1)" ${command}`
+  `docker run --rm --network ${network} "$(docker compose images -q harness | head -1)" ${command}`
 
 export const appsQueryScript = (installDir: string): string =>
   onTargetLoopback(
