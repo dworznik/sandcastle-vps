@@ -1,8 +1,9 @@
-import type { Connector } from './connectors/types.js'
+import type { Connector, ExecResult } from './connectors/types.js'
 import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js'
 import { composeScript, harnessPort, readEnvScript } from './install.js'
 import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
 import { OFF, describePosture, readToggles, type Toggles } from './posture.js'
+import { listScript, parseSessions, type RunningSession } from './session-files.js'
 import { parseProjects, projectsScript, type RemoteProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { parseProbe } from './preflight.js'
@@ -72,6 +73,9 @@ export interface StatusReport {
   /** The two toggles of ADR 0010, read from the Target's Local Config. The
    *  posture is derived from them, not stored. */
   readonly toggles: Toggles
+  /** Every running Session, found through the engine — they are not in the
+   *  stack's compose project, by design (ADR 0007). */
+  readonly sessions: readonly RunningSession[]
   /** The platform network, absent on a Target installed before it existed
    *  and not upgraded since. */
   readonly network: PlatformNetwork
@@ -80,6 +84,42 @@ export interface StatusReport {
 export interface StatusSession {
   readonly profile: TargetProfile
   readonly connector: Connector
+}
+
+/** The two answers "is anything installed here" is decided from. */
+export interface InstallProbe {
+  readonly version: ExecResult
+  readonly env: ExecResult
+  readonly targetVersion?: string
+  readonly envContent: string
+  /** False when neither probe found anything — a Target this CLI has never
+   *  installed to, or one that could not be reached; `version.code` tells
+   *  the two apart, since both reads succeed on a bare Target. */
+  readonly installed: boolean
+}
+
+/**
+ * One reading of the Target that every action which needs it installed
+ * shares, so none of them can disagree with `status` about whether it is.
+ * Never throws: the callers decide what an unreachable Target means to them.
+ */
+export const probeInstall = async (
+  connector: Connector,
+  installDir: string,
+): Promise<InstallProbe> => {
+  const [version, env] = await Promise.all([
+    connector.exec(versionScript(installDir)),
+    connector.exec(readEnvScript(installDir)),
+  ])
+  const targetVersion = parseProbe(version.stdout).version?.trim() || undefined
+  const envContent = env.stdout
+  return {
+    version,
+    env,
+    targetVersion,
+    envContent,
+    installed: Boolean(targetVersion) || envContent.trim() !== '',
+  }
 }
 
 /**
@@ -94,19 +134,17 @@ export const gatherStatus = async ({
   profile,
   connector,
 }: StatusSession): Promise<StatusReport> => {
-  const [version, env] = await Promise.all([
-    connector.exec(versionScript(profile.installDir)),
-    connector.exec(readEnvScript(profile.installDir)),
-  ])
-  const targetVersion = parseProbe(version.stdout).version?.trim()
-  const envContent = env.stdout
+  const { version, targetVersion, envContent, installed } = await probeInstall(
+    connector,
+    profile.installDir,
+  )
   const cliVersion = await packageVersion()
 
   // Both probes answer for a Target that is reachable and bare — one prints an
   // empty version, the other `cat`s a file that is not there and succeeds
   // anyway. A *non-zero* exit is the connection itself failing, which is a
   // different thing to tell the operator than "nothing is installed".
-  if (!targetVersion && !envContent.trim()) {
+  if (!installed) {
     const unreachable = version.code !== 0
     return {
       target: profile.name,
@@ -121,18 +159,20 @@ export const gatherStatus = async ({
       projects: [],
       missingCredentials: [],
       toggles: OFF,
+      sessions: [],
       network: { present: false },
     }
   }
 
   const port = harnessPort(envContent)
-  const [ps, apps, listeners, projects, images, network] = await Promise.all([
+  const [ps, apps, listeners, projects, images, network, running] = await Promise.all([
     connector.exec(composeScript(profile.installDir, 'ps')),
     connector.exec(appsQueryScript(profile.installDir)),
     connector.exec(LISTENERS_SCRIPT),
     connector.exec(projectsScript(profile.installDir, port)),
     connector.exec(imagesScript()),
     connector.exec(networkScript()),
+    connector.exec(listScript()),
   ])
 
   const built = new Set(
@@ -167,6 +207,7 @@ export const gatherStatus = async ({
     projectsError,
     missingCredentials: missing(envContent),
     toggles: readToggles(envContent),
+    sessions: parseSessions(running.stdout),
     network: parseNetwork(network.stdout),
   }
 }
@@ -242,6 +283,21 @@ export const formatStatus = (report: StatusReport): string => {
           ? `Onboarded, ${project.imageName}`
           : `Onboarded, ${project.imageName} not built yet — the first Run builds it`
       lines.push(`  ${project.name.padEnd(24)}${state}`)
+    }
+  }
+
+  // Listed by Project, because that is what a Session is one of. Only
+  // running ones exist to list: a stopped Session is a removed container.
+  lines.push('', 'Sessions')
+  if (report.sessions.length === 0) {
+    lines.push(
+      report.toggles.sessions
+        ? '  none running — open one from the menu.'
+        : '  none — sessions is off on this Target.',
+    )
+  } else {
+    for (const session of report.sessions) {
+      lines.push(`  ${session.project.padEnd(24)}${session.status}`)
     }
   }
 

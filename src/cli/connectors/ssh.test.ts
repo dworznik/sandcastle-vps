@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { extractCommand, sshArgs } from './ssh.js'
+import { attachArgs, extractCommand, sshArgs } from './ssh.js'
+
+describe('attachArgs', () => {
+  // Without a TTY on the far end `docker exec -it` refuses; and ADR 0007 says
+  // to ask for one rather than inherit whatever the operator's ssh config does.
+  it('requests a TTY explicitly, and otherwise takes the same hop as exec', () => {
+    expect(attachArgs('op@vps', 'tmux')).toEqual(['-t', ...sshArgs('op@vps', 'tmux')])
+  })
+
+  it('never elevates', () => {
+    expect(attachArgs('op@vps', 'tmux').join(' ')).not.toContain('sudo')
+  })
+})
 
 describe('sshArgs', () => {
   it('addresses the Target and hands the script to bash, not to the login shell', () => {

@@ -1,5 +1,5 @@
 import type { Connector } from './connectors/types.js'
-import { fail, readEnvScript, writeTargetEnv } from './install.js'
+import { fail, writeTargetEnv } from './install.js'
 import {
   TOGGLES,
   describePosture,
@@ -9,10 +9,9 @@ import {
   type Toggle,
   type Toggles,
 } from './posture.js'
-import { parseProbe } from './preflight.js'
 import type { TargetProfile } from './profiles.js'
 import type { Prompter } from './prompt.js'
-import { versionScript } from './status.js'
+import { probeInstall } from './status.js'
 
 /**
  * The menu's "Sessions and access": the flow that flips one of the two
@@ -45,17 +44,13 @@ export const toggleFromMenu = async (
   { profile, connector, prompter }: ToggleSession,
   log: Log = console.log,
 ): Promise<Toggles | undefined> => {
-  // The same two probes `status` decides "installed" from, so the two cannot
-  // disagree about a Target: both reads swallow a missing file and succeed,
+  // The same reading `status` decides "installed" from, so the two cannot
+  // disagree about a Target. Both reads swallow a missing file and succeed,
   // so a non-zero exit is the connection itself, which is a different thing
   // to say than "not installed".
-  const [version, current] = await Promise.all([
-    connector.exec(versionScript(profile.installDir)),
-    connector.exec(readEnvScript(profile.installDir)),
-  ])
-  if (current.code !== 0) throw fail('Reading the Target', current.code, current.stderr)
-  const existing = current.stdout
-  if (!parseProbe(version.stdout).version?.trim() && !existing.trim()) {
+  const { env, envContent: existing, installed } = await probeInstall(connector, profile.installDir)
+  if (env.code !== 0) throw fail('Reading the Target', env.code, env.stderr)
+  if (!installed) {
     log(
       '\nNothing is installed here — the install directory holds no package and no' +
         '\nenvironment file. Run install/upgrade first; the toggles live in what it writes.',

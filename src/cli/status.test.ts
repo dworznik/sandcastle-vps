@@ -46,6 +46,8 @@ interface TargetState {
   /** What `docker network inspect` printed for the platform network; empty
    *  for a Target whose install predates it. */
   readonly network?: string
+  /** What `docker ps` printed for the session containers. */
+  readonly sessions?: string
 }
 
 const JOINED = 'sandcastle-vps\tbridge\tsandcastle-vps-harness-1\tsandcastle-vps-inngest-1\n'
@@ -76,6 +78,7 @@ const fakeConnector = (state: TargetState = {}) => {
       if (script.includes('/proc/net/tcp')) return ok(LOOPBACK_ONLY)
       if (script.includes('compose ps')) return ok('NAME      STATUS\nharness   Up 2 hours')
       if (script.includes('docker network inspect')) return ok(state.network ?? JOINED)
+      if (script.includes('docker ps --filter')) return ok(state.sessions ?? '')
       return ok('')
     },
     putTar: () => Promise.resolve(),
@@ -166,6 +169,27 @@ describe('gatherStatus', () => {
     expect(formatStatus(report)).toContain('Run-only Target — sessions off, access on')
   })
 
+  // Sessions live outside the stack's compose project (ADR 0007), so they can
+  // only be found by asking the engine.
+  it('lists running Sessions by Project, from the engine', async () => {
+    const { report, ran } = await gather({
+      env: `${FULL_ENV}SESSIONS_ENABLED=true\n`,
+      sessions: 'todo\tUp 2 hours\n',
+    })
+    expect(report.sessions).toEqual([{ project: 'todo', status: 'Up 2 hours' }])
+    expect(ran.some((script) => script.startsWith('docker ps --filter label='))).toBe(true)
+    const said = formatStatus(report)
+    expect(said).toContain('Sessions')
+    expect(said).toContain('todo')
+    expect(said).toContain('Up 2 hours')
+  })
+
+  it('says why there are no Sessions on a Run-only Target', async () => {
+    const { report } = await gather()
+    expect(report.sessions).toEqual([])
+    expect(formatStatus(report)).toContain('sessions is off')
+  })
+
   it('reports the platform network and who has joined it', async () => {
     const { report } = await gather()
     expect(report.network).toEqual({
@@ -250,6 +274,7 @@ describe('formatStatus', () => {
     projects: [{ name: 'todo', imageName: 'sandcastle:todo', onboarded: true, imageBuilt: true }],
     missingCredentials: [],
     toggles: { sessions: false, access: false },
+    sessions: [],
     network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
     ...overrides,
   })

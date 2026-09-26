@@ -20,6 +20,16 @@ export const sshArgs = (host: string, script: string, opts?: ExecOptions): strin
   return [host, `bash -c ${shellQuote(remote)}`]
 }
 
+/**
+ * The argv for an attach: the same hop, plus `-t`. Requested explicitly
+ * rather than left to the operator's ssh config (ADR 0007) — without a TTY on
+ * the far end, `docker exec -it` refuses and tmux has nothing to draw on.
+ */
+export const attachArgs = (host: string, script: string): string[] => [
+  '-t',
+  ...sshArgs(host, script),
+]
+
 /** A tar arrives on stdin; nothing on either end needs rsync. */
 export const extractCommand = (destDir: string): string =>
   `mkdir -p ${shellQuote(destDir)} && tar -xzf - -C ${shellQuote(destDir)} --strip-components=1`
@@ -81,9 +91,26 @@ const execOverSsh = (host: string, script: string, opts?: ExecOptions): Promise<
     }
   })
 
+/** The operator's terminal, handed to ssh whole. Nothing is captured: the
+ *  point is a live tmux on the far end, and the exit code is the only answer. */
+const attachOverSsh = (host: string, script: string): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const child = spawn('ssh', attachArgs(host, script), { stdio: 'inherit' })
+    child.on('error', (error) =>
+      reject(
+        new Error(
+          `Could not run ssh. Is an ssh client installed on this machine? (${error.message})`,
+          { cause: error },
+        ),
+      ),
+    )
+    child.on('close', (code) => resolve(code ?? 1))
+  })
+
 export const sshConnector = (host: string, installDir: string): Connector => ({
   kind: 'ssh',
   exec: (script, opts) => execOverSsh(host, script, opts),
+  attach: (script) => attachOverSsh(host, script),
   putTar: async (stream: Readable, destDir: string): Promise<void> => {
     const { code, stderr } = await execOverSsh(host, extractCommand(destDir), { stdin: stream })
     if (code !== 0) {

@@ -108,6 +108,7 @@ const fakePrompter = (scripted: Scripted = {}) => {
       asked.push(question)
       return Promise.resolve(confirm.shift() ?? fallback)
     },
+    suspended: (work) => work(),
     close: () => {},
   }
   return { prompter, asked }

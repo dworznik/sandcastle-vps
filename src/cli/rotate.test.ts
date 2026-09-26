@@ -106,6 +106,7 @@ const fakePrompter = (picked: Rotatable[], { go = true }: { go?: boolean } = {})
       asked.push(question)
       return Promise.resolve(question.includes('Go ahead') ? go : fallback)
     },
+    suspended: (work) => work(),
     close: () => {},
   }
   return { prompter, asked }

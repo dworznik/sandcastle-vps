@@ -22,6 +22,15 @@ export interface Connector {
   putTar(stream: Readable, destDir: string): Promise<void>
   /** Report whether this Target can host the stack. */
   preflight(): Promise<Preflight>
+  /**
+   * Run a script on the Target with the operator's terminal attached — a
+   * TTY on both ends — and resolve with its exit code once it ends. This is
+   * how a Session is attached to (ADR 0007), and it is a capability rather
+   * than an obligation: a kind of Target with no terminal to offer leaves it
+   * out, and the wizard says so instead of failing. `exec` stays
+   * terminal-free either way — see docs/connectors.md.
+   */
+  attach?(script: string): Promise<number>
 }
 
 export type ConnectorKind = 'ssh' | 'orb' | 'docker-desktop' | 'docker-context'
