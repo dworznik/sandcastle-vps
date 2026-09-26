@@ -21,6 +21,9 @@ export interface Listener {
 
 /** `st` column for a socket in LISTEN. Everything else is a connection. */
 const LISTEN = '0A'
+/** A bound, unconnected UDP socket reports TCP_CLOSE — UDP has no LISTEN, and
+ *  a socket in this state is one that will answer a datagram. */
+const UDP_BOUND = '07'
 
 /** Each 32-bit word of a `/proc/net` address is little-endian hex. */
 const wordBytes = (word: string): number[] => {
@@ -77,12 +80,18 @@ const isLoopback = (bytes: readonly number[]): boolean => {
  * in LISTEN. Unparseable lines are skipped rather than guessed at — the header
  * row is one of them.
  */
-export const parseListeners = (table: string): Listener[] => {
+export const parseListeners = (table: string): Listener[] => parseTable(table, LISTEN)
+
+/** The same, for `/proc/net/udp` and `/proc/net/udp6`, where the WireGuard
+ *  port of a Target with Access enabled is the one intended public listener. */
+export const parseUdpListeners = (table: string): Listener[] => parseTable(table, UDP_BOUND)
+
+const parseTable = (table: string, state: string): Listener[] => {
   const listeners: Listener[] = []
   for (const line of table.split('\n')) {
     const fields = line.trim().split(/\s+/)
     const local = fields[1]
-    if (fields[3] !== LISTEN || local === undefined) continue
+    if (fields[3] !== state || local === undefined) continue
     const [hex, port] = local.split(':')
     if (hex === undefined || port === undefined) continue
     if (hex.length !== 8 && hex.length !== 32) continue

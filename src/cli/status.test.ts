@@ -48,7 +48,17 @@ interface TargetState {
   readonly network?: string
   /** What `docker ps` printed for the session containers. */
   readonly sessions?: string
+  /** The Access service's `compose ps` line; empty when it is not up. */
+  readonly accessService?: string
+  readonly udp?: string
 }
+
+const BOUND_UDP = [
+  '  sl  local_address rem_address   st',
+  '   0: 00000000:CA6C 00000000:0000 07 0 0 0 0 0 0 0 1 1',
+  '=====',
+  '',
+].join('\n')
 
 const JOINED = 'sandcastle-vps\tbridge\tsandcastle-vps-harness-1\tsandcastle-vps-inngest-1\n'
 
@@ -79,6 +89,10 @@ const fakeConnector = (state: TargetState = {}) => {
       if (script.includes('compose ps')) return ok('NAME      STATUS\nharness   Up 2 hours')
       if (script.includes('docker network inspect')) return ok(state.network ?? JOINED)
       if (script.includes('docker ps --filter')) return ok(state.sessions ?? '')
+      if (script.includes('/access') && script.includes('compose ps')) {
+        return ok(state.accessService ?? '')
+      }
+      if (script.includes('/proc/net/udp')) return ok(state.udp ?? '')
       return ok('')
     },
     putTar: () => Promise.resolve(),
@@ -190,6 +204,29 @@ describe('gatherStatus', () => {
     expect(formatStatus(report)).toContain('sessions is off')
   })
 
+  // With access on, WireGuard's UDP port is the one intended public listener,
+  // and the TCP exposure check is unchanged by it.
+  it('reports the WireGuard port as the intended public listener with access on', async () => {
+    const { report } = await gather({
+      env: `${FULL_ENV}ACCESS_ENABLED=true\nACCESS_ENDPOINT=vps.example.com\n`,
+      accessService: 'access\trunning\n',
+      udp: BOUND_UDP,
+    })
+    expect(report.access.enabled).toBe(true)
+    expect(report.access.listening).toEqual([{ address: '0.0.0.0', port: 51820, loopback: false }])
+    expect(report.checks.find((check) => check.label === 'loopback only')?.ok).toBe(true)
+    const said = formatStatus(report)
+    expect(said).toContain('Access')
+    expect(said).toContain('udp/51820')
+    expect(said).toContain('the one intended public listener')
+  })
+
+  it('reads a fresh install as access off', async () => {
+    const { report } = await gather()
+    expect(report.access.enabled).toBe(false)
+    expect(formatStatus(report)).toMatch(/Access\n {2}off/u)
+  })
+
   it('reports the platform network and who has joined it', async () => {
     const { report } = await gather()
     expect(report.network).toEqual({
@@ -276,6 +313,7 @@ describe('formatStatus', () => {
     toggles: { sessions: false, access: false },
     sessions: [],
     network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
+    access: { enabled: false, port: 51820, peers: [], service: '', listening: [] },
     ...overrides,
   })
 

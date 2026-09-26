@@ -144,11 +144,25 @@ What a Session does not yet carry, in this slice: the agent's credentials and yo
 
 **Sessions and access** flips the two per-Target toggles of [ADR 0010](docs/adr/0010-the-platform-is-the-operators-agent-vps.md). Both are off after an install, recorded in the Target's own `.env` as `SESSIONS_ENABLED` and `ACCESS_ENABLED` — never in your profile — and both survive an upgrade like every other value in that file. `sessions` turns the Target into a Workstation Target; enabling it first prints the trust rule from [ADR 0007](docs/adr/0007-interactive-sessions-as-per-project-containers.md) and asks, because a Project you open a Session on runs its committed Dockerfile with the Docker socket available. `access` is independent: a Run-only Target with its dashboard reachable from your phone is a real configuration. Today the toggles record state and drive **Status**; attaching Sessions, the Memory service and Access to them is the work under issue #72.
 
+**Status** also has an Access section: off, or on with the WireGuard UDP port shown as the one intended public listener, each Peer by name and tunnel address, and where each Exposed Service is reached. See [Access](#7-access).
+
 **Rotate credentials** replaces what the Target already holds. Pick any of the four credentials and the signing key; it re-asks for those, rewrites the environment file, and restarts the Harness. It is one action rather than a walk over every Project, because there is one place credentials live — the retired `sync-env` existed only because there were N copies to keep aligned.
 
 Rotating the signing key regenerates it on the Target and waits for the new one to be registered before finishing. The new key is generated beside the old one and moved into place, so a rotation that fails partway leaves the Target with the key it had. The old private half is then gone, and its registration on GitHub is stale — remove it there once the new one is in.
 
 Rotation is also the way out of a signing key the install refuses to keep: one with a passphrase, or of the wrong type.
+
+### 7. Access
+
+Access is a WireGuard VPN on the Target, provisioned and managed by the CLI, through which your own devices reach the Target's Exposed Services by plain HTTP at the tunnel address — no SSH tunnel per session, no certificate or login per service. It is a per-Target toggle, independent of Sessions: a Run-only Target with its dashboard reachable from your phone is a real configuration. See [ADR 0011](docs/adr/0011-wireguard-access-to-exposed-services.md).
+
+**Enable it** from **Sessions and access**. The first time, the wizard asks for the address your devices will reach the Target at — a public hostname or IP, defaulting to the host in the Target profile; an OrbStack machine has none a phone can reach, so give it whatever you use — and records it in the Target's `.env`. It then writes the Access service's compose project under `<install dir>/access/`, builds the image the package delivers, and starts WireGuard on `udp/51820` (pin `ACCESS_PORT` to change it). The server key is generated on the Target on first start and kept in a Docker volume, so it survives a restart, an upgrade, and disabling and enabling again. Disabling stops the service and keeps the key.
+
+**Add a Peer** from the menu, giving the device a name. The keypair is generated on the Target inside the Access container; the Target records the public half and the device's tunnel address in `access/peers.conf`, restarts the service to pick it up, and then hands you the config once — as a QR code to scan from the WireGuard app on a phone, rendered on the Target so nothing needs installing here, or as a file written at mode 600 for a laptop. The private key is not kept anywhere: not on the Target, not by the CLI. Revoking and listing Peers is issue #90.
+
+**What is exposed** is an allowlist, not a bind. The service drops all forwarding by default; the CLI writes `access/allowlist` from its Exposed Service list, and the entrypoint adds one DNAT rule per entry from the tunnel address to that service on the platform network. So "exposed" means "in the allowlist", and nothing becomes reachable by accident. On day one the list holds the Orchestrator dashboard, at `http://10.13.13.1:8288` from a connected Peer. The Dispatch surface is never in it — it is keyless by design, and a test asserts the writer refuses it. A Peer's config routes only the tunnel subnet, so the device's other traffic is untouched. If the dashboard stops answering after the stack was recreated, disable and enable access: the rules resolve service addresses when the service starts.
+
+**The trade-off**, stated as ADR 0011 records it: access is network-level, not identity-level. Anyone holding a Peer config reaches every Exposed Service, and one public listener now exists — WireGuard's UDP port — on a Target where access is enabled. The install's exposure check is unchanged by it: it reads TCP listen tables, WireGuard is UDP, and DNAT creates no listener.
 
 ## Development
 

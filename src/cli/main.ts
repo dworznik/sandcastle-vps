@@ -1,3 +1,4 @@
+import { addPeer, applyAccess } from './access-menu.js'
 import { HELP, parseArgs } from './args.js'
 import { CONNECTORS, connectorFor } from './connectors/index.js'
 import type { Connector, Preflight, PreflightCheck } from './connectors/types.js'
@@ -215,6 +216,7 @@ const menu = async (session: Session): Promise<void> => {
       { label: 'Rotate credentials', value: 'rotate' as const },
       { label: 'Sessions', value: 'sessions' as const },
       { label: 'Sessions and access', value: 'toggles' as const },
+      { label: 'Add a Peer', value: 'peer' as const },
       { label: 'Status', value: 'status' as const },
       { label: 'Quit', value: 'quit' as const },
     ])
@@ -239,10 +241,15 @@ const menu = async (session: Session): Promise<void> => {
         console.log(afterCredentials(profile, rotated, '\nThe Target holds the new credentials.'))
       }
     }
-    // The toggles record state and drive `status` in this slice; the slices
-    // that attach Sessions, the Memory service and Access to them follow.
     if (action === 'sessions') await sessionsMenu(session)
-    if (action === 'toggles') await toggleFromMenu(session)
+    // Flipping `access` brings the WireGuard service up or down (ADR 0011);
+    // `sessions` only records state, and Sessions read it when opened.
+    if (action === 'toggles') {
+      await toggleFromMenu(session, console.log, {
+        access: (enabled) => applyAccess(session, enabled),
+      })
+    }
+    if (action === 'peer') await addPeer(session)
     if (action === 'status') await reportStatus(session)
   }
 }

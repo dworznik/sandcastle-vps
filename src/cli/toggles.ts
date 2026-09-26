@@ -35,6 +35,12 @@ export interface ToggleSession {
 
 type Log = (line: string) => void
 
+/** What flipping a toggle does beyond recording it — bringing a service up
+ *  or down. Run after the state is written, so a service that fails to start
+ *  leaves the toggle on and `status` says what is wrong, rather than the
+ *  operator being told the Target is Run-only while a service is half up. */
+export type ToggleHooks = Partial<Record<Toggle, (enabled: boolean) => Promise<void>>>
+
 /**
  * The menu's "Sessions and access": show both toggles, flip one. Returns the
  * Target's toggles afterwards, or `undefined` when the Target has nothing
@@ -43,6 +49,7 @@ type Log = (line: string) => void
 export const toggleFromMenu = async (
   { profile, connector, prompter }: ToggleSession,
   log: Log = console.log,
+  hooks: ToggleHooks = {},
 ): Promise<Toggles | undefined> => {
   // The same reading `status` decides "installed" from, so the two cannot
   // disagree about a Target. Both reads swallow a missing file and succeed,
@@ -85,5 +92,6 @@ export const toggleFromMenu = async (
   // reports is what `status` will read.
   const updated = readToggles(written)
   log(`\n${picked} is now ${onOff(enabling)}. ${describePosture(updated)}`)
+  await hooks[picked]?.(enabling)
   return updated
 }
