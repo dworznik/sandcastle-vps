@@ -2,6 +2,7 @@ import type { Connector } from './connectors/types.js'
 import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js'
 import { composeScript, harnessPort, readEnvScript } from './install.js'
 import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
+import { OFF, describePosture, readToggles, type Toggles } from './posture.js'
 import { parseProjects, projectsScript, type RemoteProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { parseProbe } from './preflight.js'
@@ -68,6 +69,9 @@ export interface StatusReport {
   /** Why the Projects could not be listed, when they could not. */
   readonly projectsError?: string
   readonly missingCredentials: readonly CredentialName[]
+  /** The two toggles of ADR 0010, read from the Target's Local Config. The
+   *  posture is derived from them, not stored. */
+  readonly toggles: Toggles
   /** The platform network, absent on a Target installed before it existed
    *  and not upgraded since. */
   readonly network: PlatformNetwork
@@ -116,6 +120,7 @@ export const gatherStatus = async ({
       checks: [],
       projects: [],
       missingCredentials: [],
+      toggles: OFF,
       network: { present: false, attached: [] },
     }
   }
@@ -161,6 +166,7 @@ export const gatherStatus = async ({
     projects: listed,
     projectsError,
     missingCredentials: missing(envContent),
+    toggles: readToggles(envContent),
     network: parseNetwork(network.stdout),
   }
 }
@@ -205,6 +211,10 @@ export const formatStatus = (report: StatusReport): string => {
         ' run install/upgrade to bring it level',
     )
   }
+
+  // The posture right after the version: which of ADR 0007's two Targets this
+  // is decides what a compromise of it can reach, and the toggles say why.
+  lines.push(`  posture     ${describePosture(report.toggles)}`)
 
   for (const check of report.checks) {
     lines.push(`  ${check.ok ? 'ok  ' : 'FAIL'}        ${check.label}: ${check.detail}`)

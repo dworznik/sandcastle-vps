@@ -147,6 +147,25 @@ describe('gatherStatus', () => {
     expect(report.checks.every((check) => check.ok)).toBe(true)
   })
 
+  // A fresh install is a Run-only Target with both toggles off, and the report
+  // has to say so in those words: which posture a Target is in decides what a
+  // compromise of it can reach.
+  it('reads a fresh install as a Run-only Target with both toggles off', async () => {
+    const { report } = await gather()
+    expect(report.toggles).toEqual({ sessions: false, access: false })
+    expect(formatStatus(report)).toContain('Run-only Target — sessions off, access off')
+  })
+
+  it('reads sessions on as a Workstation Target', async () => {
+    const { report } = await gather({ env: `${FULL_ENV}SESSIONS_ENABLED=true\n` })
+    expect(formatStatus(report)).toContain('Workstation Target — sessions on, access off')
+  })
+
+  it('reports access independently of sessions', async () => {
+    const { report } = await gather({ env: `${FULL_ENV}ACCESS_ENABLED=true\n` })
+    expect(formatStatus(report)).toContain('Run-only Target — sessions off, access on')
+  })
+
   it('reports the platform network and who has joined it', async () => {
     const { report } = await gather()
     expect(report.network).toEqual({
@@ -230,6 +249,7 @@ describe('formatStatus', () => {
     checks: [{ ok: true, label: 'Harness synced', detail: 'sandcastle-vps, 1 function' }],
     projects: [{ name: 'todo', imageName: 'sandcastle:todo', onboarded: true, imageBuilt: true }],
     missingCredentials: [],
+    toggles: { sessions: false, access: false },
     network: { present: true, driver: 'bridge', attached: ['sandcastle-vps-harness-1'] },
     ...overrides,
   })
