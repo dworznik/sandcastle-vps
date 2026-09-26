@@ -182,7 +182,7 @@ const fakeConnector = (options: {
       ran.push({ script, stdin })
       const ok = (stdout: string, code = 0): Promise<ExecResult> =>
         Promise.resolve({ code, stdout, stderr: '' })
-      if (script.includes('/.env')) return ok('WORKSPACE_ROOT=/home/op/work\n')
+      if (script.includes('/.env')) return ok('WORKSPACE_ROOT=/home/op/work\nDOCKER_GID=988\n')
       // The list is asked once, before anything is changed; the by-name route
       // is the final check, and answers 404-shaped when it cannot resolve.
       if (script.includes('/projects/')) {
@@ -233,6 +233,7 @@ const fakePrompter = (answers: string[], confirmAnyway = false) => {
       asked.push(question)
       return Promise.resolve(question.includes('anyway') ? confirmAnyway : fallback)
     },
+    suspended: (work) => work(),
     close: () => {},
   }
   return { prompter, asked }
@@ -276,16 +277,32 @@ describe('addProject', () => {
     expect(stdins).toContain('build-image')
   })
 
-  // Everything runs in the container, so every step is `compose exec` — a step
-  // that ran on the Target's own shell instead would be one that needed the
-  // token put somewhere for it to read.
+  // Everything that touches the repository or the token runs in the
+  // container, so every such step is `compose exec` — a step that ran on the
+  // Target's own shell instead would be one that needed the token put
+  // somewhere for it to read. The two Session files are the exception: they
+  // hold paths and a gid, and one of them lives where the Harness cannot see.
   it('runs every step inside the Harness container', async () => {
     const { ran } = await run(ANSWERS, { before: [] })
-    const withScript = ran.filter((step) => step.stdin !== '')
+    const sessionFile = (script: string) =>
+      script.includes('compose.yaml') || script.includes('devcontainer.json')
+    const withScript = ran.filter((step) => step.stdin !== '' && !sessionFile(step.script))
     expect(withScript.length).toBeGreaterThan(0)
     for (const step of withScript) {
       expect(step.script).toContain('docker compose exec -T harness bash -s')
     }
+  })
+
+  // ADR 0007's two generated artifacts, so a Session can be opened on the
+  // Project the moment its image exists.
+  it('writes the Session compose file and the gitignored devcontainer file', async () => {
+    const { ran } = await run(ANSWERS, { before: [] })
+    const compose = ran.find((step) => step.script.includes('compose.yaml'))
+    expect(compose?.script).toContain('/home/op/.sandcastle-vps/sessions/todo')
+    expect(compose?.stdin).toContain('image: "sandcastle:todo"')
+    const dev = ran.find((step) => step.script.includes('devcontainer.json'))
+    expect(dev?.script).toContain('/home/op/work/todo/.devcontainer')
+    expect(dev?.stdin).toContain('"service": "session"')
   })
 
   // Scaffolding over someone's customisations is not recoverable by re-running

@@ -4,6 +4,7 @@ import { composeScript, fail, harnessPort, readEnvScript } from './install.js'
 import { parseProbe } from './preflight.js'
 import type { Prompter } from './prompt.js'
 import type { TargetProfile } from './profiles.js'
+import { specFor, writeSessionArtifacts } from './session-files.js'
 import { shellQuote } from './shell.js'
 import { onTargetLoopback } from './verify.js'
 
@@ -353,6 +354,15 @@ export const addProject = async (
 
   log('\nScaffolding .sandcastle/ and appending this stack’s extras…')
   await step(connector, profile.installDir, onboardScript(name), 'Onboarding the Project')
+
+  // The two Session artifacts of ADR 0007, written now so a Session can be
+  // opened the moment the image exists. On the Target's own shell rather than
+  // in the Harness: the compose file lives in the install directory, which
+  // the Harness does not mount, and neither file holds a credential.
+  await writeSessionArtifacts(
+    connector,
+    specFor(profile, env.stdout, { name, imageName: `sandcastle:${name}` }),
+  )
 
   log('\nBuilding the Project’s image. This is the slow part — it bakes in the agent')
   log('and the skill set, and it only happens once per Project.')

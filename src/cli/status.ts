@@ -3,6 +3,7 @@ import { CREDENTIAL_LABEL, missing, type CredentialName } from './credentials.js
 import { composeScript, harnessPort, readEnvScript } from './install.js'
 import { PLATFORM_NETWORK, networkScript, parseNetwork, type PlatformNetwork } from './network.js'
 import { OFF, describePosture, readToggles, type Toggles } from './posture.js'
+import { listScript, parseSessions, type RunningSession } from './session-files.js'
 import { parseProjects, projectsScript, type RemoteProject } from './onboard.js'
 import { packageVersion } from './package.js'
 import { parseProbe } from './preflight.js'
@@ -72,6 +73,9 @@ export interface StatusReport {
   /** The two toggles of ADR 0010, read from the Target's Local Config. The
    *  posture is derived from them, not stored. */
   readonly toggles: Toggles
+  /** Every running Session, found through the engine — they are not in the
+   *  stack's compose project, by design (ADR 0007). */
+  readonly sessions: readonly RunningSession[]
   /** The platform network, absent on a Target installed before it existed
    *  and not upgraded since. */
   readonly network: PlatformNetwork
@@ -121,18 +125,20 @@ export const gatherStatus = async ({
       projects: [],
       missingCredentials: [],
       toggles: OFF,
+      sessions: [],
       network: { present: false },
     }
   }
 
   const port = harnessPort(envContent)
-  const [ps, apps, listeners, projects, images, network] = await Promise.all([
+  const [ps, apps, listeners, projects, images, network, running] = await Promise.all([
     connector.exec(composeScript(profile.installDir, 'ps')),
     connector.exec(appsQueryScript(profile.installDir)),
     connector.exec(LISTENERS_SCRIPT),
     connector.exec(projectsScript(profile.installDir, port)),
     connector.exec(imagesScript()),
     connector.exec(networkScript()),
+    connector.exec(listScript()),
   ])
 
   const built = new Set(
@@ -167,6 +173,7 @@ export const gatherStatus = async ({
     projectsError,
     missingCredentials: missing(envContent),
     toggles: readToggles(envContent),
+    sessions: parseSessions(running.stdout),
     network: parseNetwork(network.stdout),
   }
 }
@@ -242,6 +249,21 @@ export const formatStatus = (report: StatusReport): string => {
           ? `Onboarded, ${project.imageName}`
           : `Onboarded, ${project.imageName} not built yet — the first Run builds it`
       lines.push(`  ${project.name.padEnd(24)}${state}`)
+    }
+  }
+
+  // Listed by Project, because that is what a Session is one of. Only
+  // running ones exist to list: a stopped Session is a removed container.
+  lines.push('', 'Sessions')
+  if (report.sessions.length === 0) {
+    lines.push(
+      report.toggles.sessions
+        ? '  none running — open one from the menu.'
+        : '  none — sessions is off on this Target.',
+    )
+  } else {
+    for (const session of report.sessions) {
+      lines.push(`  ${session.project.padEnd(24)}${session.status}`)
     }
   }
 

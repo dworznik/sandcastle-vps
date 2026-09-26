@@ -79,6 +79,7 @@ const fakePrompter = (pick: Toggle | null, { confirmed = true }: { confirmed?: b
       asked.push(question)
       return Promise.resolve(confirmed)
     },
+    suspended: (work) => work(),
     close: () => {},
   }
   return { prompter, asked }

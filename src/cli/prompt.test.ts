@@ -11,6 +11,7 @@ const harness = ({ tty = false }: { tty?: boolean } = {}) => {
   let written = ''
   output.on('data', (chunk: Buffer) => (written += chunk.toString()))
   return {
+    input,
     prompter: createPrompter(input, output),
     answer: (...lines: string[]) => input.write(lines.map((line) => `${line}\n`).join('')),
     type: (keys: string) => input.write(keys),
@@ -233,5 +234,34 @@ describe('createPrompter', () => {
     end()
     await expect(asked).rejects.toThrow(/Input ended/)
     prompter.close()
+  })
+
+  // An attached Session reads the same terminal. Readline reading it too would
+  // take every other keystroke, so it has to stop for the duration and come
+  // back afterwards — the menu is still waiting on the far side of the attach.
+  it('stops reading the input while something else has the terminal, then resumes', async () => {
+    const cli = harness()
+    let pausedDuring: boolean | undefined
+    const result = await cli.prompter.suspended(() => {
+      pausedDuring = cli.input.isPaused()
+      return Promise.resolve('done')
+    })
+    expect(result).toBe('done')
+    expect(pausedDuring).toBe(true)
+    expect(cli.input.isPaused()).toBe(false)
+
+    const asked = cli.prompter.text('Name')
+    cli.answer('after')
+    expect(await asked).toBe('after')
+    cli.prompter.close()
+  })
+
+  it('resumes reading even when the suspended work fails', async () => {
+    const cli = harness()
+    await expect(
+      cli.prompter.suspended(() => Promise.reject(new Error('ssh exited 255'))),
+    ).rejects.toThrow(/ssh exited/)
+    expect(cli.input.isPaused()).toBe(false)
+    cli.prompter.close()
   })
 })

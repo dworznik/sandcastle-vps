@@ -16,6 +16,13 @@ export interface Prompter {
    *  question is "which of these" rather than "which one". */
   multi<T>(question: string, choices: readonly Choice<T>[]): Promise<T[]>
   confirm(question: string, fallback?: boolean): Promise<boolean>
+  /**
+   * Run something that needs the terminal to itself — an attached Session —
+   * with this prompter's reading of stdin stopped for the duration. Readline
+   * otherwise keeps reading the same terminal the child is reading, and
+   * every other keystroke would land here instead of in tmux.
+   */
+  suspended<T>(work: () => Promise<T>): Promise<T>
   close(): void
 }
 
@@ -195,5 +202,17 @@ export const createPrompter = (
     }
   }
 
-  return { text, secret, select, multi, confirm, close: () => rl.close() }
+  // `pause` is what stops readline's reads of the input, and it is readline's
+  // own — the raw-mode terminal is left as it is, since a child that wants a
+  // terminal of its own (ssh -t) sets and restores it itself.
+  const suspended: Prompter['suspended'] = async (work) => {
+    rl.pause()
+    try {
+      return await work()
+    } finally {
+      rl.resume()
+    }
+  }
+
+  return { text, secret, select, multi, confirm, suspended, close: () => rl.close() }
 }

@@ -61,6 +61,17 @@ broken.
 stream is an `npm pack` tarball, whose entries are all under `package/`. Create
 the destination if it is missing. Do not require rsync — on either end.
 
+**`attach` is optional, and the only place a terminal exists.** It runs a
+script on the Target with the operator's own terminal attached at both ends
+and resolves with the exit code — the ssh Connector spawns `ssh -t` with
+inherited stdio, requesting the TTY explicitly rather than inheriting whatever
+the operator's ssh config does (ADR 0007). It exists for one caller: attaching
+to a Session's tmux. A kind of Target with no terminal to offer leaves the
+method out, and the wizard reports that it cannot attach rather than failing;
+nothing else may depend on it being there. `exec` stays terminal-free — the
+two never share a code path, so a payload on stdin can never be mistaken for
+keystrokes.
+
 **`preflight` reports, it does not fix.** Return every check, passing and
 failing, with a `remedy` for the ones a command can fix — and only when the
 command would really work. A check that can fail for several reasons has to
