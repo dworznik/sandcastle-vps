@@ -147,7 +147,9 @@ claude auth login            # once; every Session on this Target is then logged
 claude plugin install <…>    # the plugins you use; the image carries only skills
 ```
 
-What a Session does not yet carry, in this slice: persisted history and dotfiles (#89). Attaching needs a terminal on both ends, which the ssh Connector provides; a kind of Target with no terminal to offer says so and leaves the Session running for you to reach another way.
+**What persists.** A Session's shell state outlives its container, the Project's image, and an upgrade: a second external volume, `sandcastle-vps-session-state`, mounted at `~/.session-state` in every Session on the Target, holds your bash history (in bash's own format, appended as you type, so a window that dies with the container keeps what was typed in it) and, if you put them there, a `.bashrc` and a `.tmux.conf`. The Session's startup files source the `.bashrc` after the image's own, so yours wins, and link `~/.tmux.conf` to the volume's; remove either and the Session is back on the image's defaults. Both files are shared by every Project's Session, as the login is. A tmux config is seeded into the volume once, when none exists, and from that moment it is yours: edit it and the edits survive every start and upgrade; delete it and nothing writes it again. That seed is the one thing the platform ever writes into your config ([ADR 0010](docs/adr/0010-the-platform-is-the-operators-agent-vps.md)); a Session start otherwise changes nothing in the volume, which you can check by diffing it. The login shell inside a Session is bash. claude-tmux's zsh history is not carried over, by decision.
+
+Attaching needs a terminal on both ends, which the ssh Connector provides; a kind of Target with no terminal to offer says so and leaves the Session running for you to reach another way.
 
 ### 7. Status, toggles, and rotating credentials
 
