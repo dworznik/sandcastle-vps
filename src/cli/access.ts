@@ -201,6 +201,15 @@ PublicKey = ${publicKey}
 AllowedIPs = ${address}/32
 `
 
+/** One Peer, the way the operator reads it in `status` and in the menu. */
+export const describePeer = ({ name, address, added }: Peer): string =>
+  `  ${name.padEnd(12)}${address}, added ${added}`
+
+/** The whole file, from the Peers that remain. Revocation rewrites it from
+ *  the parsed list rather than editing the text, so the file can only ever
+ *  hold what the parser reads back. */
+export const renderPeersFile = (peers: readonly Peer[]): string => peers.map(renderPeer).join('\n')
+
 /**
  * Read the Peers back out of peers.conf. Only sections headed by the CLI's
  * own comment count: the file is the CLI's, and a section without the header
@@ -329,6 +338,19 @@ mkdir -p ${dir}
 
 export const readPeersScript = (installDir: string): string =>
   `cat ${shellQuote(`${accessDir(installDir)}/peers.conf`)} 2> /dev/null || true`
+
+/**
+ * Drop a Peer from the running interface, inside the Access container.
+ * Immediate — its handshake is gone and its config stops connecting — and
+ * touches no other Peer, which a restart would. The key is validated first
+ * because it is going onto a command line wg parses; it is the public half,
+ * which is not a secret.
+ */
+export const removePeerScript = (installDir: string, publicKey: string): string =>
+  accessComposeScript(
+    installDir,
+    `exec -T access wg set wg0 peer ${validateKey(publicKey, "the Peer's public key")} remove`,
+  )
 
 /** Both UDP tables at once, with the marker the TCP reader splits on. */
 export const UDP_LISTENERS_SCRIPT = `cat /proc/net/udp 2>/dev/null || true
@@ -470,9 +492,7 @@ export const formatAccess = (status: AccessStatus): string[] => {
   } else if (status.peers.length === 0) {
     lines.push('  peers       none yet — add one from the menu')
   } else {
-    for (const peer of status.peers) {
-      lines.push(`  ${peer.name.padEnd(12)}${peer.address}, added ${peer.added}`)
-    }
+    for (const peer of status.peers) lines.push(describePeer(peer))
   }
   for (const service of exposedAt()) lines.push(`  exposed     ${service}`)
   return lines

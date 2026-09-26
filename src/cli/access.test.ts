@@ -19,7 +19,9 @@ import {
   parsePeers,
   parseUdpTables,
   peerConfig,
+  removePeerScript,
   renderPeer,
+  renderPeersFile,
   validateKey,
   validatePeerName,
   writeAccessFileScript,
@@ -150,6 +152,37 @@ describe('peers.conf', () => {
     expect(() => parsePeers(`# peer: x, added 2026-09-26\n[Peer]\nPublicKey = ${KEY_A}\n`)).toThrow(
       /incomplete/u,
     )
+  })
+})
+
+describe('renderPeersFile', () => {
+  // Revocation rewrites the whole file from the Peers that remain, so the
+  // rendering has to be exactly what the parser reads back.
+  it('round-trips every Peer, with a blank line between sections', () => {
+    const file = renderPeersFile([phone, laptop])
+    expect(parsePeers(file)).toEqual([phone, laptop])
+    expect(file).toContain('/32\n\n# peer: laptop')
+  })
+
+  it('renders no Peers as an empty file', () => {
+    expect(renderPeersFile([])).toBe('')
+    expect(parsePeers(renderPeersFile([]))).toEqual([])
+  })
+})
+
+describe('removePeerScript', () => {
+  // Immediate: the Peer is dropped from the running interface rather than
+  // waiting for a restart, so its config stops connecting at once and the
+  // other Peers' tunnels are not touched.
+  it('removes the Peer from the running interface, inside the Access container', () => {
+    const script = removePeerScript(INSTALL_DIR, KEY_A)
+    expect(script).toContain('exec -T access')
+    expect(script).toContain(`wg set wg0 peer ${KEY_A} remove`)
+    expect(script).not.toContain('restart')
+  })
+
+  it('refuses a key that is not one, before it reaches wg', () => {
+    expect(() => removePeerScript(INSTALL_DIR, 'nope; rm -rf /')).toThrow(/Not a WireGuard key/u)
   })
 })
 

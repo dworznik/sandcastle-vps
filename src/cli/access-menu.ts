@@ -5,13 +5,16 @@ import {
   accessDown,
   accessPort,
   accessUp,
+  describePeer,
   endpointFrom,
   exposedAt,
   nextPeerAddress,
   parsePeers,
   peerConfig,
   readPeersScript,
+  removePeerScript,
   renderPeer,
+  renderPeersFile,
   validateKey,
   validatePeerName,
   writeAccessFileScript,
@@ -22,14 +25,14 @@ import { fail, readEnvScript, writeTargetEnv } from './install.js'
 import { readToggles } from './posture.js'
 import { parseProbe } from './preflight.js'
 import type { TargetProfile } from './profiles.js'
-import type { Prompter } from './prompt.js'
+import type { Choice, Prompter } from './prompt.js'
 import { readEnv, upsertEnv } from './target-env.js'
 
 /**
  * The parts of Access that ask the operator something: bringing it up when
  * the toggle is flipped, which needs the address Peers will reach the Target
- * at, and adding a Peer, which needs a name and a choice of QR code or file.
- * What a Peer or the service is lives in access.ts.
+ * at; adding a Peer, which needs a name and a choice of QR code or file; and
+ * revoking one by name. What a Peer or the service is lives in access.ts.
  */
 
 export interface AccessSession {
@@ -78,6 +81,25 @@ export const applyAccess = async (
   log(`\nAccess is up: WireGuard on udp/${accessPort(envContent)}. Exposed over it:`)
   for (const service of exposedAt()) log(`  ${service}`)
   log('\nNext: add a Peer, from the menu.')
+}
+
+/**
+ * The Target's environment, for a Peer action, or `undefined` — said, not
+ * thrown — when access is off: every Peer action needs the service, and the
+ * toggle is where the service comes from.
+ */
+const withAccessOn = async (
+  connector: Connector,
+  installDir: string,
+  log: Log,
+): Promise<string | undefined> => {
+  const current = await connector.exec(readEnvScript(installDir))
+  if (current.code !== 0) throw fail('Reading the Target', current.code, current.stderr)
+  if (!readToggles(current.stdout).access) {
+    log('\nAccess is off on this Target. Enable it first, from "Sessions and access".')
+    return undefined
+  }
+  return current.stdout
 }
 
 /**
@@ -137,13 +159,8 @@ export const addPeer = async (
   }: AddPeerOptions = {},
 ): Promise<Peer | undefined> => {
   const { installDir } = profile
-  const current = await connector.exec(readEnvScript(installDir))
-  if (current.code !== 0) throw fail('Reading the Target', current.code, current.stderr)
-  const envContent = current.stdout
-  if (!readToggles(envContent).access) {
-    log('\nAccess is off on this Target. Enable it first, from "Sessions and access".')
-    return undefined
-  }
+  const envContent = await withAccessOn(connector, installDir, log)
+  if (envContent === undefined) return undefined
   const endpoint = readEnv(envContent, ENDPOINT_KEY)
   if (!endpoint) {
     log('\nNo endpoint is recorded for this Target. Disable and enable access to set one.')
@@ -214,4 +231,69 @@ export const addPeer = async (
   log(`\n${name} is ${peer.address} on the tunnel. Once connected, reach:`)
   for (const service of exposedAt()) log(`  ${service}`)
   return peer
+}
+
+/**
+ * The menu's "Revoke a Peer". Returns the Peer that was revoked, or
+ * `undefined` when nothing was changed.
+ *
+ * The record first, then the interface: the record is what the interface is
+ * rebuilt from on its next start, so once the Peer is out of it the
+ * revocation holds whatever happens next. Dropping it from the running
+ * interface is what makes it immediate, and it is done with `wg set` rather
+ * than a restart so the other Peers' tunnels are not touched.
+ */
+export const revokePeer = async (
+  { profile, connector, prompter }: AccessSession,
+  log: Log = console.log,
+): Promise<Peer | undefined> => {
+  const { installDir } = profile
+  if ((await withAccessOn(connector, installDir, log)) === undefined) return undefined
+
+  const existing = await connector.exec(readPeersScript(installDir))
+  const peers = parsePeers(existing.stdout)
+  if (peers.length === 0) {
+    log('\nNo Peers are recorded on this Target. Nothing to revoke.')
+    return undefined
+  }
+  log('\nPeers on this Target:')
+  for (const peer of peers) log(describePeer(peer))
+
+  const name = (await prompter.text('Which Peer should be revoked? (its name)')).trim()
+  const peer = peers.find((candidate) => candidate.name === name)
+  if (!peer) {
+    log(`\nNo Peer called ${name} is recorded. Nothing was changed.`)
+    return undefined
+  }
+
+  const written = await connector.exec(writeAccessFileScript(installDir, 'peers.conf'), {
+    stdin: renderPeersFile(peers.filter((candidate) => candidate !== peer)),
+  })
+  if (written.code !== 0) throw fail('Rewriting the Peer record', written.code, written.stderr)
+
+  const removed = await connector.exec(removePeerScript(installDir, peer.publicKey))
+  if (removed.code === 0) {
+    log(`\n${name} is revoked: dropped from the interface, and its config no longer connects.`)
+  } else {
+    // Out of the record is revoked: the interface is built from the record on
+    // its next start, so the Peer is never admitted again. Said, not failed —
+    // there was nothing connected to drop.
+    log(
+      `\n${name} is removed from the record, but the Access service is not running, so there` +
+        '\nwas no live interface to drop it from. It will not be admitted when the service starts.',
+    )
+  }
+  return peer
+}
+
+/** The menu's "Access": the Peer actions, under one entry. */
+export const accessMenu = async (session: AccessSession, log: Log = console.log): Promise<void> => {
+  const actions: Choice<'add' | 'revoke' | null>[] = [
+    { label: 'Add a Peer', value: 'add' },
+    { label: 'Revoke a Peer', value: 'revoke' },
+    { label: 'Back', value: null },
+  ]
+  const action = await session.prompter.select('Access', actions)
+  if (action === 'add') await addPeer(session, log)
+  if (action === 'revoke') await revokePeer(session, log)
 }

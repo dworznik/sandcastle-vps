@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { addPeer, applyAccess, keypairScript, parseKeypair } from './access-menu.js'
+import {
+  accessMenu,
+  addPeer,
+  applyAccess,
+  keypairScript,
+  parseKeypair,
+  revokePeer,
+} from './access-menu.js'
 import { parsePeers, renderPeer, type Peer } from './access.js'
 import type { Connector, ExecOptions, ExecResult } from './connectors/types.js'
 import type { Choice, Prompter } from './prompt.js'
@@ -69,20 +76,34 @@ interface Answers {
   readonly name?: string
   readonly how?: 'qr' | 'file'
   readonly endpoint?: string
+  /** The name given to "Which Peer". */
+  readonly revoke?: string
+  /** What to pick from the Access menu, by value. */
+  readonly action?: string | null
 }
 
-const fakePrompter = ({ name = 'phone', how = 'qr', endpoint }: Answers = {}) => {
+const fakePrompter = ({
+  name = 'phone',
+  how = 'qr',
+  endpoint,
+  revoke = 'laptop',
+  action = null,
+}: Answers = {}) => {
   const asked: string[] = []
   const prompter: Prompter = {
     text: (question, fallback) => {
       asked.push(question)
       if (question.startsWith('A name')) return Promise.resolve(name)
       if (question.startsWith('The address')) return Promise.resolve(endpoint ?? fallback ?? '')
+      if (question.startsWith('Which Peer')) return Promise.resolve(revoke)
       return Promise.resolve(fallback ?? 'typed')
     },
     secret: () => Promise.reject(new Error('nothing here is secret to ask for')),
     select: <T>(question: string, choices: readonly Choice<T>[]) => {
       asked.push(question)
+      if (question === 'Access') {
+        return Promise.resolve(choices.find((choice) => choice.value === action)?.value as T)
+      }
       return Promise.resolve(choices[how === 'qr' ? 0 : 1]?.value as T)
     },
     multi: () => Promise.resolve([]),
@@ -254,5 +275,92 @@ describe('addPeer', () => {
 
   it('says the service is not running when the keypair cannot be generated', async () => {
     await expect(run({ failing: 'wg genkey' })).rejects.toThrow(/Access service running/u)
+  })
+})
+
+const revoke = async (target: TargetState = {}, answers: Answers = {}) => {
+  const { connector, calls } = fakeConnector(target)
+  const { prompter, asked } = fakePrompter(answers)
+  const lines: string[] = []
+  const revoked = await revokePeer({ profile, connector, prompter }, (line) => lines.push(line))
+  const recorded = calls.find(
+    (call) => call.script.includes('peers.conf') && call.stdin !== undefined,
+  )
+  return { revoked, calls, asked, shown: lines.join('\n'), recorded: recorded?.stdin }
+}
+
+describe('revokePeer', () => {
+  const both = `${renderPeer(laptop)}\n${renderPeer({ ...laptop, name: 'phone', publicKey: PUBLIC, address: '10.13.13.3' })}`
+
+  it('drops the Peer from the record and from the running interface, in that order', async () => {
+    const { revoked, recorded, calls } = await revoke({ peers: both }, { revoke: 'laptop' })
+    expect(revoked?.name).toBe('laptop')
+    expect(parsePeers(recorded ?? '').map((peer) => peer.name)).toEqual(['phone'])
+    const scripts = calls.map((call) => call.script)
+    const written = scripts.findIndex((script) => script.includes('mv "$tmp"'))
+    const removed = scripts.findIndex((script) =>
+      script.includes(`wg set wg0 peer ${OTHER} remove`),
+    )
+    expect(written).toBeGreaterThanOrEqual(0)
+    expect(removed).toBeGreaterThan(written)
+  })
+
+  // Other Peers stay connected: nothing restarts, and their sections are
+  // written back unchanged.
+  it('leaves the other Peers alone and does not restart the service', async () => {
+    const { recorded, calls } = await revoke({ peers: both }, { revoke: 'laptop' })
+    expect(recorded).toContain(`PublicKey = ${PUBLIC}`)
+    expect(calls.some((call) => call.script.includes('restart'))).toBe(false)
+  })
+
+  it('says so and changes nothing for a name that is not recorded', async () => {
+    const { revoked, shown, recorded, calls } = await revoke({ peers: both }, { revoke: 'tablet' })
+    expect(revoked).toBeUndefined()
+    expect(shown).toContain('No Peer called tablet')
+    expect(recorded).toBeUndefined()
+    expect(calls.some((call) => call.script.includes('wg set'))).toBe(false)
+  })
+
+  it('says there is nothing to revoke when no Peer is recorded', async () => {
+    const { revoked, shown, asked } = await revoke({ peers: '' })
+    expect(revoked).toBeUndefined()
+    expect(shown).toContain('No Peers')
+    expect(asked.some((question) => question.startsWith('Which Peer'))).toBe(false)
+  })
+
+  it('refuses when access is off', async () => {
+    const { revoked, shown } = await revoke({ env: 'ACCESS_ENABLED=false\n', peers: both })
+    expect(revoked).toBeUndefined()
+    expect(shown).toContain('Access is off')
+  })
+
+  // The record is what the interface is built from on the next start, so a
+  // Peer removed from it while the service is down is still revoked — it is
+  // never admitted again. Said, rather than failed.
+  it('keeps the revocation when the service is not running, and says so', async () => {
+    const { revoked, recorded, shown } = await revoke(
+      { peers: both, failing: 'wg set' },
+      { revoke: 'laptop' },
+    )
+    expect(revoked?.name).toBe('laptop')
+    expect(parsePeers(recorded ?? '').map((peer) => peer.name)).toEqual(['phone'])
+    expect(shown).toContain('not running')
+  })
+})
+
+describe('accessMenu', () => {
+  it('does nothing on Back', async () => {
+    const { connector, calls } = fakeConnector()
+    const { prompter, asked } = fakePrompter({ action: null })
+    await accessMenu({ profile, connector, prompter }, () => {})
+    expect(asked).toEqual(['Access'])
+    expect(calls).toEqual([])
+  })
+
+  it('reaches the revoke flow', async () => {
+    const { connector, calls } = fakeConnector({ peers: renderPeer(laptop) })
+    const { prompter } = fakePrompter({ action: 'revoke', revoke: 'laptop' })
+    await accessMenu({ profile, connector, prompter }, () => {})
+    expect(calls.some((call) => call.script.includes(`wg set wg0 peer ${OTHER} remove`))).toBe(true)
   })
 })
